@@ -26,10 +26,13 @@ protected:
     // As a convention to avoid conflict with services, Apps start at 0x00 and are less than 0x80 aka < 128 aka low bit
     const uint8_t _id; // ID MUST be unique among all installed apps. This makes it easier to quickly identify apps
     RetOS* _retos; // pointer to the os object
+    lv_obj_t* screen; // the LVGL screen for this app to draw on. If you stay inside these bounds you don't mess up OS widgets
     DynamicJsonDocument _args; // args used when opening the app
+    virtual void start(JsonDocument& args, RetOS* retos) = 0; // called after construction once the UI is ready to be drawn on
 
 public:
-    virtual void start(JsonDocument& args, RetOS* retos); // called after construction once the UI is ready to be drawn on
+    void startApp(JsonDocument& args, RetOS* retos);
+    
     virtual void loop() = 0; // called periodically by OS so you can do work. TIme varies by sleep and power level.
     virtual void stop() = 0; // called when the app is closed, before destruction
 

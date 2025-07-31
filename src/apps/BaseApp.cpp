@@ -6,9 +6,13 @@ BaseApp::BaseApp(const char *name, const uint8_t id) :
     strncpy(_name, name, RETOS_MAX_APP_NAME_SIZE + 1);
 }
 
-void BaseApp::start(JsonDocument& args, RetOS* retos) {
+void BaseApp::startApp(JsonDocument& args, RetOS* retos) {
     _args = args;
     _retos = retos;
+
+    retos->ui()->clear_app_screen();
+    screen = retos->ui()->app_screen();
+    this->start(args, retos);
 }
 
 const uint8_t BaseApp::id() const
