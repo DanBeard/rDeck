@@ -4,10 +4,16 @@
 
 #include "TDeckPro.h"
 #include "retHal/Screen/TDeckProScreen.h"
+#include "retHal/Keyboard/TDeckProKeyboard.h"
+#include <SD.h>
 
 TDeckProScreen screen;
+TDeckProKeyboard kb;
+
 RetHal tDeckProHal = {
-    .screen = &screen
+    .screen = &screen,
+    .fs     = &SD,
+    .keyboard = &kb
 };
 
 TouchDrvCSTXXX tDeckProTouch;

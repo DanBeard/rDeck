@@ -9,7 +9,7 @@
 // #include <TouchDrvCSTXXX.hpp>
 // TouchDrvCSTXXX touch;
 
-forward_list<AppInfo> apps={AppFactory<HelloWorld>("HW", 1), AppFactory<HelloWorld>("HW2", 2)};
+forward_list<AppInfo> apps={AppFactory<HelloWorld>("HW", 1), AppFactory<NotesApp>("Notes", 2)};
 forward_list<ServiceInfo> services = {};
 
 // main app that launches other apps

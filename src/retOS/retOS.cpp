@@ -59,7 +59,6 @@ void RetOS::start(){
             }
         } while(!all_good);
         
-
         // init the UI
         _ui.init();
 
@@ -143,4 +142,8 @@ void RetOS::initHardware(){
     _hal.screen->initScreen();
     _hal.screen->drawStartupScreen();
     _hal.screen->initLvgl();
+
+    _hal.keyboard->initKeyboard();
+    _hal.keyboard->initLvgl();   
+
 }
