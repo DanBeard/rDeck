@@ -15,6 +15,7 @@ class BaseService;
 struct AppInfo {
     const char *name;
     const uint8_t id;
+    const void* icon;
     function<BaseApp*()> factory ;
 };
 
@@ -24,10 +25,11 @@ struct ServiceInfo {
     function<BaseService*()> factory ;
 };
 
-template<class T> constexpr AppInfo AppFactory(const char *name, const uint8_t id) {
+template<class T> constexpr AppInfo AppFactory(const char *name, const uint8_t id, const void* icon) {
     AppInfo result = {
         .name = name,
         .id = id,
+        .icon = icon,
         .factory = [name, id](){return new T(name, id);}
     };
     return result;
@@ -58,6 +60,10 @@ public:
     void launchApp(int8_t id);
     void launchApp(int8_t id, JsonDocument& args);
     void backToLauncher();
+
+    // run the functor after ms milliseconds
+    // THis function takes control of the functor and will delete the ptr after it's run
+    void run_later(std::function<void()> func, uint32_t ms);
 
 protected:
     BaseApp* _active_app = nullptr;

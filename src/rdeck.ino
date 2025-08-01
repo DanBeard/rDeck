@@ -2,6 +2,7 @@
 #include "rdeck.h"
 #include "retOS/retOS.h"
 #include "apps/apps.h"
+#include "assets/assets.h"
 
 // board config
  #include "boards/TDeckPro.h"
@@ -9,11 +10,11 @@
 // #include <TouchDrvCSTXXX.hpp>
 // TouchDrvCSTXXX touch;
 
-forward_list<AppInfo> apps={AppFactory<HelloWorld>("HW", 1), AppFactory<NotesApp>("Notes", 2)};
+forward_list<AppInfo> apps={AppFactory<HelloWorld>("HW", 1, &img_setting), AppFactory<NotesApp>("Notes", 2, &img_test)};
 forward_list<ServiceInfo> services = {};
 
 // main app that launches other apps
-AppInfo launcherFactory = AppFactory<Launcher>("Launcher", 0);
+AppInfo launcherFactory = AppFactory<Launcher>("Launcher", 0, nullptr);
 
 
 RetOS retos(BOARD_HAL, services, apps, launcherFactory);

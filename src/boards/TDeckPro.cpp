@@ -6,14 +6,17 @@
 #include "retHal/Screen/TDeckProScreen.h"
 #include "retHal/Keyboard/TDeckProKeyboard.h"
 #include <SD.h>
+#include "retHal/Battery/TDeckProBattery.h"
 
 TDeckProScreen screen;
 TDeckProKeyboard kb;
+TDeckProBattery bat;
 
 RetHal tDeckProHal = {
     .screen = &screen,
     .fs     = &SD,
-    .keyboard = &kb
+    .keyboard = &kb,
+    .battery = &bat
 };
 
 TouchDrvCSTXXX tDeckProTouch;
@@ -75,7 +78,7 @@ void tDeckBoardInit() {
     }
 
 
-    Serial.println(" ------------- PERI ------------- ");
+    Serial.println(" ------------- PERIPHERALS ------------- ");
     delay(1000);
     // SPI
     SPI.begin(BOARD_SPI_SCK, BOARD_SPI_MISO, BOARD_SPI_MOSI);
@@ -85,6 +88,11 @@ void tDeckBoardInit() {
     bool good =tDeckProTouch.begin(Wire, BOARD_I2C_ADDR_TOUCH, BOARD_TOUCH_SDA, BOARD_TOUCH_SCL);
     if(good) Serial.println("Touch begin true");
     else Serial.println("Touch begin false");
+
+    // SD card
+    if(!SD.begin(BOARD_SD_CS)){
+        Serial.println("[SD CARD] Card Mount Failed");
+    }
 
 
     // TODO

@@ -69,7 +69,9 @@ void Launcher::menu_btn_create(lv_obj_t *parent, AppInfo& appInfo, int x, int y)
 
     lv_obj_set_x(btn, x);
     lv_obj_set_y(btn, y);
-    lv_obj_set_style_bg_img_src(btn, &img_lora, LV_PART_MAIN | LV_STATE_DEFAULT);
+    const void *icon = &img_touch;
+    if(appInfo.icon) icon = appInfo.icon;
+    lv_obj_set_style_bg_img_src(btn,icon, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_label_set_text(label, appInfo.name);
     lv_obj_set_style_border_width(label, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
     //launch on click

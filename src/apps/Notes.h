@@ -6,6 +6,9 @@ class NotesApp : public BaseApp {
     // inherit default ctor
     using BaseApp::BaseApp;
 
+    const char* notesPath = "/notes.txt";
+    lv_obj_t * ta;
+
     virtual void start(JsonDocument& args, RetOS* retos);
     virtual void loop();
     virtual void stop();
