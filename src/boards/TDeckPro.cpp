@@ -7,18 +7,22 @@
 #include "retHal/Keyboard/TDeckProKeyboard.h"
 #include <SD.h>
 #include "retHal/Battery/TDeckProBattery.h"
+#include "retHal/GPS/TDeckProGPS.h"
 
 TDeckProScreen screen;
 TDeckProKeyboard kb;
 TDeckProBattery bat;
+TDeckProGPS gps;
 
 RetHal tDeckProHal = {
     .screen = &screen,
     .fs     = &SD,
     .keyboard = &kb,
-    .battery = &bat
+    .battery = &bat,
+    .gps = &gps
 };
 
+// board init
 TouchDrvCSTXXX tDeckProTouch;
 
 void tDeckBoardInit() {

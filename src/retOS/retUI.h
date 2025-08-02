@@ -6,6 +6,13 @@
 class RetOS;
 class BaseScreen;
 
+
+struct ServiceIcon {
+    uint8_t serviceID;
+    const char* icon;
+    lv_opa_t opacity;
+};
+
 class RetUI {
     friend class RetOS;
 
@@ -19,6 +26,10 @@ class RetUI {
 
         void hideBackButton();
         void showBackButton();
+
+        // service UI icons
+        void setServiceIcon(ServiceIcon &iconInfo);
+        void renderServiceIcons();
 
         // LVGL accessors
         lv_obj_t* app_screen() const;
@@ -39,6 +50,7 @@ class RetUI {
         // top bar components
         lv_obj_t* _top_bar;
         lv_obj_t *_battery;
+        lv_obj_t *_service_icons;
         lv_obj_t *_back_btn;
         const char * _last_battery_symbol = LV_SYMBOL_BATTERY_EMPTY;
 

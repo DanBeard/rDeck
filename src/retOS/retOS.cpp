@@ -43,7 +43,7 @@ void RetOS::start(){
         for(auto sInfo : _serviceInfos) {
             BaseService* service = sInfo.factory();
             _services.push_front(service);
-            service->start(this);
+            service->startService(this);
         }
 
         // wait for all the services  to finish starting up
@@ -158,10 +158,8 @@ void RetOS::loop() {
         } 
 
         uint32_t time_till_next = tick();
-        if(time_till_next == LV_NO_TIMER_READY) time_till_next = 100; /*handle LV_NO_TIMER_READY. Another option is to `sleep` for longer*/
-        delay(time_till_next);
-
-        
+        if(time_till_next == LV_NO_TIMER_READY) time_till_next = 16; /*handle LV_NO_TIMER_READY. Another option is to `sleep` for longer*/
+        delay(time_till_next);       
         tickCount++;
     }
 }
@@ -192,4 +190,7 @@ void RetOS::initHardware(){
         _hal.battery->initBattery();
     }
 
+    if(_hal.gps) {
+        _hal.gps->initGPS();
+    }
 }

@@ -20,12 +20,14 @@ struct AppInfo {
 };
 
 struct ServiceInfo {
-    const char *name;
     const uint8_t id;
     function<BaseService*()> factory ;
 };
 
-template<class T> constexpr AppInfo AppFactory(const char *name, const uint8_t id, const void* icon) {
+static uint8_t id_counter = 1; 
+
+template<class T> AppInfo AppFactory(const char *name, const void* icon) {
+    const uint8_t id = id_counter++;
     AppInfo result = {
         .name = name,
         .id = id,
@@ -35,11 +37,11 @@ template<class T> constexpr AppInfo AppFactory(const char *name, const uint8_t i
     return result;
 };
 
- template<class T> constexpr ServiceInfo ServiceFactory(const char *name, const uint8_t id) {
+ template<class T> ServiceInfo ServiceFactory() {
+    const uint8_t id = id_counter++;
     ServiceInfo result = {
-        .name = name,
         .id = id,
-        .factory = [name,id](){return new T(name, id);}
+        .factory = [id](){return new T(id);}
     };
     return result;
 };

@@ -33,10 +33,11 @@ void RetUI::init() {
 
 
     _root = lv_obj_create(NULL);
+    lv_obj_set_style_pad_top(_root, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_clear_flag(_root, LV_OBJ_FLAG_SCROLLABLE);      /// Flags
     lv_obj_set_layout(_root, LV_LAYOUT_FLEX);
     lv_obj_set_flex_flow(_root, LV_FLEX_FLOW_COLUMN);
-     lv_obj_set_flex_align(_root, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+    lv_obj_set_flex_align(_root, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
 
     // top bar on....top of app canvas
     drawTopBar();
@@ -46,7 +47,7 @@ void RetUI::init() {
     //lv_obj_set_size(_app_screen, lv_pct(100), lv_pct(100));
     lv_obj_set_width(_app_screen, lv_pct(100));
     lv_obj_set_flex_grow(_app_screen, 1);
-    //lv_obj_set_style_pad_top(_app_screen, 22, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_top(_app_screen, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
 
 
     Serial.println("Initing UI...");
@@ -77,9 +78,10 @@ static void back_btn_event_cb(lv_event_t *e) {
 void RetUI::drawTopBar() {
          // top bar with status like battery
     _top_bar = lv_obj_create(_root);
-    lv_obj_set_size(_top_bar, lv_pct(100), 20);
+    lv_obj_set_size(_top_bar, lv_pct(100), 25);
     //lv_obj_set_pos(_top_bar, 0, 0);
     lv_obj_set_flex_grow(_top_bar, 0);
+    lv_obj_set_style_pad_top(_top_bar, 10, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_border_width(_top_bar, 2, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_border_color(_top_bar, fg_color(), LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_border_side(_top_bar, LV_BORDER_SIDE_BOTTOM, LV_STATE_DEFAULT);
@@ -97,13 +99,33 @@ void RetUI::drawTopBar() {
     lv_obj_set_ext_click_area(_back_btn, 20);
 
     _battery = lv_label_create(_top_bar);
+    lv_label_set_text(_battery, LV_SYMBOL_REFRESH);
     lv_obj_set_width(_battery, LV_SIZE_CONTENT);   /// 1
     lv_obj_set_height(_battery, LV_SIZE_CONTENT);    /// 1
-    lv_obj_set_align(_battery, LV_ALIGN_RIGHT_MID);
+    lv_obj_set_align(_battery, LV_ALIGN_BOTTOM_RIGHT);
+    lv_obj_set_pos(_battery, 0,10);
     lv_obj_set_style_text_color(_battery, fg_color(), LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_text_opa(_battery, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_label_set_text(_battery, LV_SYMBOL_REFRESH);
+    
 
+    _service_icons = lv_obj_create(_top_bar);
+    lv_obj_set_width(_service_icons, 85);   /// 1
+    lv_obj_set_height(_service_icons, 22);
+    //lv_obj_set_pos(_service_icons, 85, 0);
+    lv_obj_align_to(_service_icons, _battery, LV_ALIGN_OUT_LEFT_BOTTOM, 5, 4);
+    lv_obj_clear_flag(_service_icons, LV_OBJ_FLAG_SCROLLABLE);      /// Flags
+    lv_obj_set_style_pad_top(_service_icons, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+    // lv_obj_set_layout(_service_icons, LV_LAYOUT_FLEX);
+    lv_obj_set_flex_flow(_service_icons, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(_service_icons, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_START);
+
+    //lv_obj_set_style_border_width(_service_icons, 2, LV_PART_MAIN | LV_STATE_DEFAULT);
+    //lv_obj_set_style_border_color(_service_icons, fg_color(), LV_PART_MAIN | LV_STATE_DEFAULT);
+
+    lv_obj_move_foreground(_battery);
+
+    // render any service icons that got registered before we created the bar
+    renderServiceIcons();
 
 }
 
@@ -135,6 +157,44 @@ void RetUI::slow_loop() {
     }
 }
 
+// max 6 service icons
+#define NUM_SERVICE_ICONS 6
+ServiceIcon serviceIcons[NUM_SERVICE_ICONS] = {0};
+
+void RetUI::setServiceIcon(ServiceIcon &iconInfo) {
+    // assume that we grow from first to last
+    // and that we never delete service icons (just set opacity to 0)
+    // so if we find one where id =0, boom take it
+    for(int i=0; i<NUM_SERVICE_ICONS; i++){
+        if(serviceIcons[i].serviceID == iconInfo.serviceID || serviceIcons[i].serviceID == 0){
+            serviceIcons[i] = iconInfo;
+            i = NUM_SERVICE_ICONS + 1; // break
+        }
+    }
+
+    renderServiceIcons();
+}
+
+void RetUI::renderServiceIcons() {
+    if(_service_icons) {
+        lv_obj_clean(_service_icons);
+        lv_coord_t x = lv_obj_get_width(_service_icons);
+        for(int i=0; i<NUM_SERVICE_ICONS; i++){
+            if(serviceIcons[i].serviceID > 0) {
+                Serial.printf("Service ICON op= %u \n", serviceIcons[i].opacity);
+                lv_obj_t *icon = lv_label_create(_service_icons);
+                //lv_obj_set_width(icon, 25);   /// 1
+                //lv_obj_set_height(icon, 25);
+                //lv_obj_set_pos(_service_icons, x, 0);
+                x-=25;
+                //lv_obj_set_flex_grow(icon, 0);
+                lv_label_set_text(icon,serviceIcons[i].icon);
+                lv_obj_set_style_text_color(icon, fg_color(), LV_PART_MAIN | LV_STATE_DEFAULT);
+                lv_obj_set_style_text_opa(icon, serviceIcons[i].opacity, LV_PART_MAIN | LV_STATE_DEFAULT);
+            }  
+    }
+    }
+}
 
 
 void RetUI::hideBackButton() {

@@ -6,8 +6,9 @@
  }
 
 
- void BaseService::start(RetOS* retos){
+ void BaseService::startService(RetOS* retos){
     _retos = retos;
+    this->start(retos);
  }
 
 const uint8_t BaseService::id() const {

@@ -143,7 +143,7 @@ static void tdeck_pro_touchpad_read(lv_indev_drv_t * indev_drv, lv_indev_data_t 
         data->point.x = last_x;
         data->point.y = last_y;
 
-        Serial.printf("x=%d, y=%d\n", last_x, last_y);
+        //Serial.printf("x=%d, y=%d\n", last_x, last_y);
     } else {
         data->state = LV_INDEV_STATE_REL;
     }

@@ -69,7 +69,7 @@ static void lvgl_keyboard_read(lv_indev_drv_t * indev, lv_indev_data_t * data){
         row = k / KEYPAD_COLS;
         col = (KEYPAD_COLS-1) - k % KEYPAD_COLS;
         c = keymap[row][col];
-        Serial.printf("k=%d, v=%d, press:%d, %d, %c\n", k, v, row, col, c);
+        //Serial.printf("k=%d, v=%d, press:%d, %d, %c\n", k, v, row, col, c);
     }
 
     data->state = state;

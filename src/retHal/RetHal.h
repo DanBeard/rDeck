@@ -4,6 +4,7 @@
 #include "Keyboard/BaseKeyboard.h"
 #include "FS.h" // ARduino already has a good enough abstraction. Stick to that.
 #include "Battery/BaseBattery.h"
+#include "GPS/BaseGPS.h"
 
 struct RetHal {
 
@@ -14,5 +15,6 @@ struct RetHal {
 
     // optional. set to nullptr if not supported
     BaseBattery* battery;
+    BaseGPS*     gps;
 
 };
