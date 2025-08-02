@@ -6,11 +6,11 @@
 #include <stdint.h>
 #include "retHal/Lora/BaseLora.h"
 
-/// !!! ON READ
-///!!!!!! TODO YOU NEED TO STRIP THE HEADER BYTE AND DEAL WITH SPLIT PACKETS!!!
 
-/// !!! ON WRITE
-///!!!!!! TODO YOU NEED TO DEAL WITH TOO BIG OF PACKETS AND SPLIT/ SEND 2 OUT IF BIGGER THAN LORA PACKET SIZE!!!!!
+#define MAX_LORA_PACKET_SIZE 255
+#define LORA_HEADER_SIZE 1
+#define LORA_FLAG_SPLIT 0x01
+
 
 namespace RNS { namespace Interfaces {
 
@@ -43,6 +43,10 @@ namespace RNS { namespace Interfaces {
         //bool _is_transmitting = false; // For non-blocking transmit
 
 		BaseLora* _lora;
+		static const uint8_t SEQ_UNSET = 0xFF;
+		uint8_t _seq = SEQ_UNSET;
+		uint8_t* _split_buf = nullptr;
+		size_t _split_buf_len = 0;
 
 	};
 

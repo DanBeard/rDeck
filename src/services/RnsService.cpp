@@ -59,6 +59,7 @@ void RnsService::start(RetOS* retos){
 
     // set to running
     _status = RUNNING;
+    announce();
 }
 
 
@@ -69,14 +70,13 @@ void RnsService::announce() {
 		// test path
 		//destination.announce(RNS::bytesFromString(fruits[RNS::Cryptography::randomnum() % 7]), true, nullptr, RNS::bytesFromString("test_tag"));
 		// test packet send
-        char buffer[100];
+        uint8_t buffer[100];
         StaticJsonDocument<100> doc;
-        JsonArray nameArray = doc.to<JsonArray>();
-        nameArray.add("RDECK");
-        nameArray.add(nullptr);
-        size_t bytesWritten = serializeMsgPack(nameArray, buffer, 100);
+        doc.add("RDECK");
+        doc.add(nullptr);
+        size_t bytesWritten = serializeMsgPack(doc, buffer, 100);
         TRACE("LoRaInterface: announce bytes written = " + std::to_string(bytesWritten) + " ........");
-		destination.announce(RNS::bytesFromChunk((const uint8_t*)buffer, bytesWritten), false, lora_interface);
+		destination.announce(RNS::bytesFromChunk(buffer, bytesWritten), false, lora_interface);
 	}
 }
 
@@ -84,7 +84,7 @@ static unsigned long last_announce = 0;
 void RnsService::tick() {
     // TODO TEMP FOR TESTING REMOVE ME OR MAKE MUCH LONGER OR VIA CONFIG
     unsigned long now = millis();
-    if(now - last_announce > (10*1000)){
+    if(now - last_announce > (10*60*1000)){
         Serial.println("RNS ANNOUNCE");
         announce();
         last_announce = now;
