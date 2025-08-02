@@ -10,7 +10,7 @@ class NotesApp : public BaseApp {
     lv_obj_t * ta;
 
     virtual void start(JsonDocument& args, RetOS* retos);
-    virtual void loop();
+    virtual void tick();
     virtual void stop();
 
     virtual EventStatus onEvent(Event& event);

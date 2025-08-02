@@ -15,7 +15,7 @@
 
 }
 
-/*virtual */ void HelloWorld::loop() {
+/*virtual */ void HelloWorld::tick() {
     
 }
 

@@ -20,7 +20,7 @@
 
 }
 
-/*virtual */ void Launcher::loop() {
+/*virtual */ void Launcher::tick() {
     
 }
 

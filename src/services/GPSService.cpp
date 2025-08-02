@@ -8,13 +8,17 @@ void GPSService::start(RetOS* retos){
     // set to running
     _status = RUNNING;
 }
-void GPSService::loop() {
+void GPSService::tick() {
     _gps->tick();
     bool newIsValid = _gps->GPS->location.isValid();
     if(newIsValid != isValid){
         updateIcon(newIsValid);
         isValid = newIsValid;
     }
+
+    // TODO sync up RTC with the GPS time and keep track so we know the real time
+    // Won't really be useful until we get a settings app with timezones and stuff 
+
     // TODO once event system works. Send out events when things happen? like when you're somewhere?
 }
 

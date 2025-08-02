@@ -31,7 +31,7 @@ protected:
 public:
     BaseService(const uint8_t id);
     virtual void start(RetOS* retos)=0; // called after construction once the OS is ready to launch services
-    virtual void loop() = 0; // called periodically by OS so you can do work. TIme varies by sleep and power level.
+    virtual void tick() = 0; // called periodically by OS so you can do work. TIme varies by sleep and power level.
     virtual EventStatus onEvent(Event& event) = 0;
 
     const uint8_t id() const;

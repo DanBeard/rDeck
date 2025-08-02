@@ -8,18 +8,21 @@
 #include <SD.h>
 #include "retHal/Battery/TDeckProBattery.h"
 #include "retHal/GPS/TDeckProGPS.h"
+#include "retHal/Lora/TDeckProLora.h"
 
 TDeckProScreen screen;
 TDeckProKeyboard kb;
 TDeckProBattery bat;
 TDeckProGPS gps;
+TDeckProLora lora;
 
 RetHal tDeckProHal = {
     .screen = &screen,
     .fs     = &SD,
     .keyboard = &kb,
     .battery = &bat,
-    .gps = &gps
+    .gps = &gps,
+    .lora = &lora
 };
 
 // board init

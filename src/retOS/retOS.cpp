@@ -134,11 +134,11 @@ void RetOS::backToLauncher(){
 uint32_t RetOS::tick() {
             // loop services
             for(auto service : _services) {
-                service->loop();
+                service->tick();
             }
             // loop apps
             if(_active_app != nullptr) {
-                _active_app->loop();
+                _active_app->tick();
             }
             // loop UI/ timers
             uint32_t time_till_next = lv_timer_handler();
@@ -192,5 +192,9 @@ void RetOS::initHardware(){
 
     if(_hal.gps) {
         _hal.gps->initGPS();
+    }
+
+    if(_hal.lora) {
+        _hal.lora->initLora();
     }
 }

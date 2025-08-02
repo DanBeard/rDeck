@@ -5,6 +5,7 @@
 #include "FS.h" // ARduino already has a good enough abstraction. Stick to that.
 #include "Battery/BaseBattery.h"
 #include "GPS/BaseGPS.h"
+#include "Lora/BaseLora.h"
 
 struct RetHal {
 
@@ -16,5 +17,6 @@ struct RetHal {
     // optional. set to nullptr if not supported
     BaseBattery* battery;
     BaseGPS*     gps;
+    BaseLora* lora;
 
 };

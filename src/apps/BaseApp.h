@@ -33,7 +33,7 @@ protected:
 public:
     void startApp(JsonDocument& args, RetOS* retos);
     
-    virtual void loop() = 0; // called periodically by OS so you can do work. TIme varies by sleep and power level.
+    virtual void tick() = 0; // called periodically by OS so you can do work. TIme varies by sleep and power level.
     virtual void stop() = 0; // called when the app is closed, before destruction
 
     virtual EventStatus onEvent(Event& event) = 0;

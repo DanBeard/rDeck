@@ -14,7 +14,7 @@
 forward_list<AppInfo> apps= {AppFactory<HelloWorld>("HW", &img_setting), AppFactory<NotesApp>("Notes", &img_test)};
 forward_list<ServiceInfo> services = {
       ServiceFactory<GPSService>(),
-      ServiceFactory<LoraService>(), 
+      ServiceFactory<RnsService>(), 
      };
 
 // main app that launches other apps

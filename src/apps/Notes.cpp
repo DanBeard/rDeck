@@ -46,7 +46,7 @@
     file.close();
 }
 
-/*virtual */ void NotesApp::loop() {
+/*virtual */ void NotesApp::tick() {
     
 }
 
