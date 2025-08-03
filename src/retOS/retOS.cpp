@@ -136,8 +136,6 @@ uint32_t RetOS::tick() {
             // loop UI/ timers
             uint32_t time_till_next = lv_timer_handler();
             lv_task_handler();
-            //TODO REMOVE ME
-            _hal.screen->fullRefresh();
             //Serial.printf("tick %u -- ", time_till_next);
             return time_till_next;
 }

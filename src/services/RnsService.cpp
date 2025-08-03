@@ -3,14 +3,49 @@
 #include "RnsUtils/LoraInterface.h"
 #include "Bytes.h"
 
+// Yeah this means there can be only 1
+static RnsService* rnsService = nullptr; 
+
 RnsService::RnsService(uint8_t id): reticulum({RNS::Type::NONE}),
  identity({RNS::Type::NONE}),
  destination({RNS::Type::NONE}),
   rns_fs({RNS::Type::NONE}),
   lora_interface({RNS::Type::NONE}),
    BaseService(id) {
-
+    // make sure there's only 1
+    assert(rnsService == nullptr);
+    rnsService = this;
 }
+
+// c style callbacks
+static void onPacket(const RNS::Bytes& data, const RNS::Packet& packet) {
+    RNS::Bytes source = data.mid(0, 16);
+    RNS::Bytes signature = data.mid(16, 16 + 64);
+    RNS::Bytes packed_payload = data.mid(16 + 64);
+
+    INFO("LXMF: source: " + source.toHex());
+    INFO("LXMF: signature: " + signature.toHex());
+    INFO("LXMF: packed_payload: " + packed_payload.toHex());
+
+    // FIXME: validate signatures
+    JsonDocument doc;
+    deserializeMsgPack(doc,  packed_payload.data()); //packed_payload.size()
+    float timestamp = doc[0];
+    const char* title = doc[1];
+    const char* contents = doc[2];
+    //size_t fieldsize?
+
+    Serial.println("[RNS] PACKET---------");
+    Serial.println(timestamp);
+    Serial.println(title);
+    Serial.println(contents);
+    Serial.println("[RNS] END PACKET---------");
+}
+
+static void onLink(RNS::Link& link) {
+    Serial.println("LINK ESTABLISH? yay?");
+}
+
 void RnsService::start(RetOS* retos){
     updateIcon(false);
 
@@ -36,22 +71,30 @@ void RnsService::start(RetOS* retos){
     if(!_fs->exists("/reticulum")){
         _fs->mkdir("/reticulum");
     }
-    if(!_fs->exists("/reticulum/identity.priv")) {
+    if(true || !_fs->exists("/reticulum/identity.priv")) {
         // new identity
         Serial.println("[RNS] Creating new Identity...");
         identity = RNS::Identity(true);
         RNS::Bytes priv = identity.get_private_key();
         File priv_file = _fs->open("/reticulum/identity.priv", FILE_WRITE, true);
-        auto priv_hex = priv.toHex();
-        priv_file.write((uint8_t *)priv_hex.c_str(), priv_hex.size());
+        const char* priv_hex = priv.toHex().c_str();
+
+        JsonDocument doc;
+        doc["priv_hex"] = priv_hex;
+        serializeJson(doc, priv_file);
+
+        //priv_file.write((uint8_t *)priv_hex.c_str(), priv_hex.size());
         priv_file.close();
 
     } else {
         Serial.println("[RNS] Loading Identity...");
         identity = RNS::Identity(false);
         File priv_file = _fs->open("/reticulum/identity.priv", FILE_READ);
+        JsonDocument doc;
+        deserializeJson(doc, priv_file);
+
         RNS::Bytes prv_bytes;
-        prv_bytes.assignHex(priv_file.readString().c_str());
+        prv_bytes.assignHex(doc["priv_hex"]);
         identity.load_private_key(prv_bytes);
         priv_file.close();
     }
@@ -66,7 +109,7 @@ void RnsService::start(RetOS* retos){
         Serial.println("[RNS] Loading User Info...");
         File config_file = _fs->open("/reticulum/userinfo.json", FILE_READ);
         deserializeJson(userInfo, config_file);
-        serializeJsonPretty(userInfo, Serial);
+        //serializeJsonPretty(userInfo, Serial);
         config_file.close();
     }
 
@@ -77,6 +120,10 @@ void RnsService::start(RetOS* retos){
     //prv_bytes.assignHex("78E7D93E28D55871608FF13329A226CABC3903A357388A035B360162FF6321570B092E0583772AB80BC425F99791DF5CA2CA0A985FF0415DAB419BBC64DDFAE8");
     //
     destination = RNS::Destination(identity, RNS::Type::Destination::IN, RNS::Type::Destination::SINGLE, "lxmf", "delivery");
+    destination.set_packet_callback(onPacket);
+    destination.set_link_established_callback(onLink);
+    destination.set_proof_strategy(RNS::Type::Destination::PROVE_NONE);
+
 
     // HEAD("Registering packet callback with Destination...", RNS::LOG_TRACE);
 	// 	destination.set_packet_callback(onPacket);
@@ -121,6 +168,7 @@ void RnsService::announce() {
         doc.add(MsgPackBinary(name,strnlen(name,100)));
         //doc.add("RDECK STR");
         doc.add(nullptr);
+        //doc.add("rand?");
         size_t bytesWritten = serializeMsgPack(doc, buffer, 200);
         Serial.println("ANNOUNCE MSGPACK-------");
         Serial.println(name);

@@ -6,21 +6,6 @@
 using namespace RNS;
 using namespace RNS::Interfaces;
 
-// transmit 
-//static int transmissionState = RADIOLIB_ERR_NONE;
-static volatile bool transmittedFlag = false;
-
-static void set_transmit_flag(void){
-    transmittedFlag = true;
-}
-
-// receive
-static volatile bool receivedFlag = false;
-
-static void set_receive_flag(void){
-    receivedFlag = true;
-}
-
 
 LoRaInterface::LoRaInterface(BaseLora* lora ) : _lora(lora), InterfaceImpl("Lora") {
 
@@ -72,6 +57,8 @@ void LoRaInterface::tick(RNS::Interface& interface) {
 		// Check for incoming packet
         size_t packet_len = _lora->packetLength();
         if(packet_len == 0) return; // no packet -- exit
+        Serial.println("Lora Packet Recv!");
+        Serial.println(packet_len);
 
         uint8_t lora_packet[MAX_LORA_PACKET_SIZE];
         if(_lora->read(lora_packet, packet_len))  {

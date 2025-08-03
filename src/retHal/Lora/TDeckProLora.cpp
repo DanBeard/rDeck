@@ -2,6 +2,11 @@
 #include <RadioLib.h>
 
 static Module radioModule(BOARD_LORA_CS, BOARD_LORA_INT, BOARD_LORA_RST, BOARD_LORA_BUSY);
+static bool _recv_flag = false;
+
+void onPacketRecv() {
+    _recv_flag = true;
+}
 
 TDeckProLora::TDeckProLora() : radio(&radioModule)  {
 
@@ -28,22 +33,27 @@ bool TDeckProLora::startLora(LoraConfig config) {
         // error
         return true;
     }
-
+    radio.setPacketReceivedAction(onPacketRecv);
+    radio.startReceive();
     return false; //it's allll good if we got here
 }
 bool TDeckProLora::hasPacket() {
     return packetLength() > 0;
 }
 size_t TDeckProLora::packetLength() {
+    if(!_recv_flag) return 0;
     return radio.getPacketLength();
 }
 // true = error
 bool TDeckProLora::read(uint8_t* data, uint32_t len) {
+     _recv_flag = false;
      return radio.readData(data, len) != RADIOLIB_ERR_NONE;
 }
 
 bool TDeckProLora::transmit(uint8_t* data, uint32_t len) {
-    return radio.transmit(data, len) != RADIOLIB_ERR_NONE;
+    bool result = radio.transmit(data, len) != RADIOLIB_ERR_NONE;
+    radio.startReceive();
+    return result;
 }
 float TDeckProLora::getRSSI() {
     return radio.getRSSI();
