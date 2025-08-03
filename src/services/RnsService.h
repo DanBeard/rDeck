@@ -28,10 +28,15 @@ public:
 
     bool isValid = false;
 
+    JsonDocument userInfo;
+    void saveUserInfo();
+    
+
 protected:
     void updateIcon(bool status);
     // just Lora for now, but we could do TCP/UDP/etc in the future over wifi
     BaseLora* _lora;
+    FS* _fs;
 
     RNS::Reticulum reticulum;
     RNS::Identity identity;

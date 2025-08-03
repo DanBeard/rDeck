@@ -3,7 +3,7 @@
 #include "lvgl.h"
 #include "assets/assets.h"
 
-/*virtual */ void Launcher::start(JsonDocument& args, RetOS* retos) {
+/*virtual */ void Launcher::start(RetOS* retos) {
 
     _ui = retos->ui();
 

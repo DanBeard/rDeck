@@ -9,7 +9,7 @@ class NotesApp : public BaseApp {
     const char* notesPath = "/notes.txt";
     lv_obj_t * ta;
 
-    virtual void start(JsonDocument& args, RetOS* retos);
+    virtual void start(RetOS* retos);
     virtual void tick();
     virtual void stop();
 

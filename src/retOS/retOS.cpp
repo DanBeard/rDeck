@@ -66,8 +66,7 @@ void RetOS::start(){
         Serial.println("Starting launcher app.....");
         _ui.hideBackButton();
         _launcher = _launcherInfo.factory();
-        StaticJsonDocument<0> emptyDoc;
-        _launcher->startApp(emptyDoc, this);
+        _launcher->startApp(this);
     }
 
     // will not return from here
@@ -75,18 +74,13 @@ void RetOS::start(){
 
 }
 void RetOS::launchApp(int8_t id){
-    StaticJsonDocument<0> args;
-    return launchApp(id, args);
-}
-void RetOS::launchApp(int8_t id, JsonDocument& args){
     _ui.showLoadingScreen();
     // TODO: Lots of Heap anc copy shenanigans here. But its only when launching an app
     // Profile and see if we need to clean it up. Do we even need the args anymore?
     // Could save space and time by removing them!!
 
     // give the loading screen one frame before actuallying do the launching
-    DynamicJsonDocument *heap_args = new DynamicJsonDocument(args.capacity());
-    run_later([this, id, heap_args]() {
+    run_later([this, id]() {
         // clean up current app
     if(_active_app) {
         _active_app->stop();
@@ -97,10 +91,9 @@ void RetOS::launchApp(int8_t id, JsonDocument& args){
     for(AppInfo app : _appInfos){
         if(app.id == id) {
             _active_app = app.factory();
-            _active_app->startApp(*heap_args, this);
+            _active_app->startApp(this);
              _ui.showAppScreen();
              _ui.showBackButton();
-            delete heap_args;
             return;
         }
     }
@@ -123,7 +116,7 @@ void RetOS::backToLauncher(){
             }
 
             StaticJsonDocument<0> args;
-            _launcher->startApp(args, this);
+            _launcher->startApp(this);
             _ui.showAppScreen();
             _ui.hideBackButton();
             // launcher is NOT set to active app so it never really gets deleted. Just hidden.

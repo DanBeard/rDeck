@@ -1,6 +1,7 @@
 #include "RnsService.h"
 #include "lvgl.h"
 #include "RnsUtils/LoraInterface.h"
+#include "Bytes.h"
 
 RnsService::RnsService(uint8_t id): reticulum({RNS::Type::NONE}),
  identity({RNS::Type::NONE}),
@@ -13,7 +14,9 @@ RnsService::RnsService(uint8_t id): reticulum({RNS::Type::NONE}),
 void RnsService::start(RetOS* retos){
     updateIcon(false);
 
-    _lora = retos->hal().lora;
+    RetHal hal = retos->hal();
+    _lora = hal.lora;
+    _fs = hal.fs;
 
     lora_interface_impl = new RNS::Interfaces::LoRaInterface(_lora);
     lora_interface = RNS::Interface(lora_interface_impl);
@@ -28,15 +31,51 @@ void RnsService::start(RetOS* retos){
     reticulum = RNS::Reticulum();
     reticulum.transport_enabled(true);
 	reticulum.start();
-    // new identity
-    identity = RNS::Identity(true);
+
+    // do we have a saved identity?
+    if(!_fs->exists("/reticulum")){
+        _fs->mkdir("/reticulum");
+    }
+    if(!_fs->exists("/reticulum/identity.priv")) {
+        // new identity
+        Serial.println("[RNS] Creating new Identity...");
+        identity = RNS::Identity(true);
+        RNS::Bytes priv = identity.get_private_key();
+        File priv_file = _fs->open("/reticulum/identity.priv", FILE_WRITE, true);
+        auto priv_hex = priv.toHex();
+        priv_file.write((uint8_t *)priv_hex.c_str(), priv_hex.size());
+        priv_file.close();
+
+    } else {
+        Serial.println("[RNS] Loading Identity...");
+        identity = RNS::Identity(false);
+        File priv_file = _fs->open("/reticulum/identity.priv", FILE_READ);
+        RNS::Bytes prv_bytes;
+        prv_bytes.assignHex(priv_file.readString().c_str());
+        identity.load_private_key(prv_bytes);
+        priv_file.close();
+    }
+    // userInfo
+    if(!_fs->exists("/reticulum/userinfo.json")) {
+        Serial.println("[RNS] Creating new User Info...");
+        //new user info
+        userInfo["name"] = "New rDeck";
+        //serializeJsonPretty(userInfo, Serial);
+        saveUserInfo();
+    } else {
+        Serial.println("[RNS] Loading User Info...");
+        File config_file = _fs->open("/reticulum/userinfo.json", FILE_READ);
+        deserializeJson(userInfo, config_file);
+        serializeJsonPretty(userInfo, Serial);
+        config_file.close();
+    }
+
 
       // load identity
     //identity = RNS::Identity(false);
     //RNS::Bytes prv_bytes;
     //prv_bytes.assignHex("78E7D93E28D55871608FF13329A226CABC3903A357388A035B360162FF6321570B092E0583772AB80BC425F99791DF5CA2CA0A985FF0415DAB419BBC64DDFAE8");
-    //identity.load_private_key(prv_bytes);
-
+    //
     destination = RNS::Destination(identity, RNS::Type::Destination::IN, RNS::Type::Destination::SINGLE, "lxmf", "delivery");
 
     // HEAD("Registering packet callback with Destination...", RNS::LOG_TRACE);
@@ -62,6 +101,11 @@ void RnsService::start(RetOS* retos){
     announce();
 }
 
+void RnsService::saveUserInfo() {
+    File config_file = _fs->open("/reticulum/userinfo.json", FILE_WRITE, true);
+    serializeJsonPretty(userInfo, config_file);
+    config_file.close();
+}
 
 void RnsService::announce() {
     if (destination) {
@@ -70,11 +114,20 @@ void RnsService::announce() {
 		// test path
 		//destination.announce(RNS::bytesFromString(fruits[RNS::Cryptography::randomnum() % 7]), true, nullptr, RNS::bytesFromString("test_tag"));
 		// test packet send
-        uint8_t buffer[100];
-        StaticJsonDocument<100> doc;
-        doc.add("RDECK");
+        uint8_t buffer[200];
+        JsonDocument doc;
+        // throw together the name
+        const char * name = userInfo["name"];
+        doc.add(MsgPackBinary(name,strnlen(name,100)));
+        //doc.add("RDECK STR");
         doc.add(nullptr);
-        size_t bytesWritten = serializeMsgPack(doc, buffer, 100);
+        size_t bytesWritten = serializeMsgPack(doc, buffer, 200);
+        Serial.println("ANNOUNCE MSGPACK-------");
+        Serial.println(name);
+        for(int i=0; i< bytesWritten; i++){
+            Serial.print((int)buffer[i]); Serial.print(',');
+        }
+        Serial.println("\n END ANNOUNCE MSGPACK-------");
         TRACE("LoRaInterface: announce bytes written = " + std::to_string(bytesWritten) + " ........");
 		destination.announce(RNS::bytesFromChunk(buffer, bytesWritten), false, lora_interface);
 	}

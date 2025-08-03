@@ -60,7 +60,6 @@ public:
     const forward_list<AppInfo>& appInfo() const;
 
     void launchApp(int8_t id);
-    void launchApp(int8_t id, JsonDocument& args);
     void backToLauncher();
 
     // run the functor after ms milliseconds

@@ -2,7 +2,7 @@
 #include "lvgl.h"
 
 
-/*virtual */ void NotesApp::start(JsonDocument& args, RetOS* retos) {
+/*virtual */ void NotesApp::start(RetOS* retos) {
 
     ta = lv_textarea_create(screen);
     lv_group_add_obj(retos->ui()->default_input_group(), ta);

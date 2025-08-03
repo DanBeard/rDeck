@@ -2,7 +2,7 @@
 
 
 
-/*virtual */ void HelloWorld::start(JsonDocument& args, RetOS* retos) {
+/*virtual */ void HelloWorld::start(RetOS* retos) {
     lv_obj_t *label2 = lv_label_create(screen);
     lv_obj_set_width(label2, LV_SIZE_CONTENT);   /// 1
     lv_obj_set_height(label2, LV_SIZE_CONTENT);    /// 1

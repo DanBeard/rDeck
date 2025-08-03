@@ -1,6 +1,5 @@
 #pragma once
 
-#include <ArduinoJson.h>
 #include "../retOS/Events.h"
 #include "../retOS/retOS.h"
 

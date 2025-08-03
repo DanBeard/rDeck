@@ -6,7 +6,7 @@ class HelloWorld : public BaseApp {
     // inherit default ctor
     using BaseApp::BaseApp;
 
-    virtual void start(JsonDocument& args, RetOS* retos);
+    virtual void start(RetOS* retos);
     virtual void tick();
     virtual void stop();
 
