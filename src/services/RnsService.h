@@ -14,6 +14,7 @@
 #include "Utilities/OS.h"
 #include "RnsUtils/FileSystem.h"
 #include "RnsUtils/LoraInterface.h"
+#include "RnsUtils/RDeckAnnounceHandler.h"
 
 class RnsService: public BaseService {
     
@@ -30,6 +31,9 @@ public:
 
     JsonDocument userInfo;
     void saveUserInfo();
+
+    RNS::Destination lxmf_delivery_src;
+    RNS::Reticulum reticulum;
     
 
 protected:
@@ -38,14 +42,17 @@ protected:
     BaseLora* _lora;
     FS* _fs;
 
-    RNS::Reticulum reticulum;
     RNS::Identity identity;
-    RNS::Destination destination;
+
+    // our destination for sending/recing lxmf messages
+    
     //RNS::Interfaces::UDPInterface udp_interface("udp");
     RNS::Interfaces::LoRaInterface *lora_interface_impl;
     RNS::Interface lora_interface;
 
     RNS::FileSystem rns_fs;
+
+    std::shared_ptr<RDeckAnnounceHandler> _announce_handler;
 
 
 };

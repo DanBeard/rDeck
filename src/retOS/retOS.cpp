@@ -55,7 +55,7 @@ void RetOS::start(){
             }
             if(!all_good) {
                 tick();
-                delay(1);
+                //delay(1);
             }
         } while(!all_good);
         
@@ -149,8 +149,9 @@ void RetOS::loop() {
         } 
 
         uint32_t time_till_next = tick();
-        if(time_till_next == LV_NO_TIMER_READY) time_till_next = 16; /*handle LV_NO_TIMER_READY. Another option is to `sleep` for longer*/
-        delay(time_till_next);       
+        if(time_till_next == LV_NO_TIMER_READY) time_till_next = 5; /*handle LV_NO_TIMER_READY. Another option is to `sleep` for longer*/
+        //delay(time_till_next);    
+        delay(1);   
         tickCount++;
     }
 }

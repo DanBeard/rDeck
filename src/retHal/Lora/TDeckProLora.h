@@ -18,4 +18,6 @@ class TDeckProLora  : public BaseLora {
 
     protected:
         SX1262 radio;
+
+
 };

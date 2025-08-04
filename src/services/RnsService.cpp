@@ -8,7 +8,7 @@ static RnsService* rnsService = nullptr;
 
 RnsService::RnsService(uint8_t id): reticulum({RNS::Type::NONE}),
  identity({RNS::Type::NONE}),
- destination({RNS::Type::NONE}),
+ lxmf_delivery_src({RNS::Type::NONE}),
   rns_fs({RNS::Type::NONE}),
   lora_interface({RNS::Type::NONE}),
    BaseService(id) {
@@ -18,32 +18,110 @@ RnsService::RnsService(uint8_t id): reticulum({RNS::Type::NONE}),
 }
 
 // c style callbacks
-static void onPacket(const RNS::Bytes& data, const RNS::Packet& packet) {
-    RNS::Bytes source = data.mid(0, 16);
-    RNS::Bytes signature = data.mid(16, 16 + 64);
-    RNS::Bytes packed_payload = data.mid(16 + 64);
+// static void onPacket(const RNS::Bytes& plaintext, const RNS::Packet& packet) {
+//     RNS::Bytes dest = data.mid(0, 16);
+//     RNS::Bytes source = data.mid(16, 16*2);
+//     RNS::Bytes signature = data.mid(2*16, 2*16 + 64);
+//     RNS::Bytes packed_payload = data.mid(2*16 + 64);
 
-    INFO("LXMF: source: " + source.toHex());
+//     INFO("LXMF: source: " + source.toHex());
+//     INFO("LXMF: signature: " + signature.toHex());
+//     INFO("LXMF: packed_payload: " + packed_payload.toHex());
+
+//     // FIXME: validate signatures
+//     JsonDocument doc;
+//     deserializeMsgPack(doc,  packed_payload.data()); //packed_payload.size()
+//     float timestamp = doc[0];
+//     const char* title = doc[1];
+//     const char* contents = doc[2];
+//     //size_t fieldsize?
+
+//     Serial.println("[RNS] PACKET---------");
+//     Serial.println(timestamp);
+//     Serial.println(title);
+//     Serial.println(contents);
+//     Serial.println("[RNS] END PACKET---------");
+// }
+static void onLinkPacket(const RNS::Bytes& plaintext, const RNS::Packet& packet) {
+
+    Serial.print("[[PACKET]] --");
+    RNS::Bytes my_hash = plaintext.mid(0, 16);
+    RNS::Bytes their_hash = plaintext.mid(16, 16);
+    RNS::Bytes signature = plaintext.mid(2*16, 64);
+    RNS::Bytes packed_payload = plaintext.mid(2*16 + 64);
+
+    INFO("LXMF: plaintext: " + plaintext.toHex());
+    INFO("LXMF: source: " + their_hash.toHex());
+    INFO("LXMF: dest: " + my_hash.toHex());
     INFO("LXMF: signature: " + signature.toHex());
     INFO("LXMF: packed_payload: " + packed_payload.toHex());
+    
+    //Serial.println(plaintext.toHex().c_str());
+    JsonDocument msg;
+    deserializeMsgPack(msg, packed_payload.data(), packed_payload.size());
+    // print to serial for debug
+    serializeJsonPretty(msg, Serial);
 
-    // FIXME: validate signatures
-    JsonDocument doc;
-    deserializeMsgPack(doc,  packed_payload.data()); //packed_payload.size()
-    float timestamp = doc[0];
-    const char* title = doc[1];
-    const char* contents = doc[2];
-    //size_t fieldsize?
+    float timestamp = msg[0];
+    MsgPackBinary title = msg[1];
+    MsgPackBinary contents = msg[2];
+    char text[200] = {0};
+    memcpy(text, contents.data(), contents.size());
+    Serial.println(" ");
+    Serial.print(text);
+    Serial.println("\n/[[PACKET]] --");
 
-    Serial.println("[RNS] PACKET---------");
-    Serial.println(timestamp);
-    Serial.println(title);
-    Serial.println(contents);
-    Serial.println("[RNS] END PACKET---------");
+    RNS::Identity srcIdent = RNS::Identity::recall(their_hash);
+  
+    RNS::Destination srcDest(srcIdent, RNS::Type::Destination::OUT,RNS::Type::Destination::SINGLE, "lxmf",  "delivery");
+    JsonDocument reply_payload;
+    reply_payload.add(timestamp + 1);
+    reply_payload.add(MsgPackBinary("ECHO", strlen("ECHO")));
+    reply_payload.add(MsgPackBinary("ECHO", strlen("ECHO")));
+    reply_payload.add(nullptr); //fields. dont support em for now
+
+    uint8_t packed_reply_payload[300];
+    size_t bytes_written = serializeMsgPack(reply_payload, packed_reply_payload, 300);
+
+    RNS::Bytes hashed_part;
+    hashed_part.append(their_hash);
+    hashed_part.append(my_hash);
+    hashed_part.append(packed_reply_payload, bytes_written); 
+
+    RNS::Bytes hash = RNS::Identity::full_hash(hashed_part);
+    RNS::Bytes signed_part;
+    signed_part.append(hashed_part);
+    signed_part.append(hash);
+
+    RNS::Bytes reply_sig = rnsService->lxmf_delivery_src.sign(signed_part);
+    Serial.println(their_hash.size());
+    Serial.println(my_hash.size());
+    Serial.println(reply_sig.size());
+    RNS::Bytes packed;
+    ///packed.append(their_hash);
+    packed.append(my_hash);
+    packed.append(reply_sig);
+    packed.append(packed_reply_payload, bytes_written);
+    RNS::Packet *send_packet = new RNS::Packet(srcDest, packed);
+    const RNS::Link& link = *(packet.link());
+    //send_packet.link((RNS::Link&)link);
+    //send_packet.
+    retOsGlobalPtr->run_later([send_packet]() {
+        Serial.println("SENDING ECHO]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]");
+        send_packet->send();
+        delete send_packet;
+        Serial.println("/SENDING ECHO]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]");
+    }, 2500);
+   
+    //rnsService->lxmf_delivery_src.s
+
+
+
 }
-
 static void onLink(RNS::Link& link) {
+    rnsService->reticulum.should_persist_data();
     Serial.println("LINK ESTABLISH? yay?");
+    link.set_link_packet_callback(onLinkPacket);
 }
 
 void RnsService::start(RetOS* retos){
@@ -64,14 +142,15 @@ void RnsService::start(RetOS* retos){
     lora_interface_impl->start();
 
     reticulum = RNS::Reticulum();
-    reticulum.transport_enabled(true);
+
+    reticulum.transport_enabled(false);
 	reticulum.start();
 
     // do we have a saved identity?
     if(!_fs->exists("/reticulum")){
         _fs->mkdir("/reticulum");
     }
-    if(true || !_fs->exists("/reticulum/identity.priv")) {
+    if(!_fs->exists("/reticulum/identity.priv")) {
         // new identity
         Serial.println("[RNS] Creating new Identity...");
         identity = RNS::Identity(true);
@@ -119,11 +198,19 @@ void RnsService::start(RetOS* retos){
     //RNS::Bytes prv_bytes;
     //prv_bytes.assignHex("78E7D93E28D55871608FF13329A226CABC3903A357388A035B360162FF6321570B092E0583772AB80BC425F99791DF5CA2CA0A985FF0415DAB419BBC64DDFAE8");
     //
-    destination = RNS::Destination(identity, RNS::Type::Destination::IN, RNS::Type::Destination::SINGLE, "lxmf", "delivery");
-    destination.set_packet_callback(onPacket);
-    destination.set_link_established_callback(onLink);
-    destination.set_proof_strategy(RNS::Type::Destination::PROVE_NONE);
+    _announce_handler = make_shared<RDeckAnnounceHandler>();
+    RNS::Transport::register_announce_handler(_announce_handler);
 
+    lxmf_delivery_src = RNS::Destination(identity, RNS::Type::Destination::IN, RNS::Type::Destination::SINGLE, "lxmf", "delivery");
+    lxmf_delivery_src.set_packet_callback(onLinkPacket);
+    lxmf_delivery_src.set_link_established_callback(onLink);
+    //lxmf_delivery_src.accepts_links(false);
+    lxmf_delivery_src.set_proof_strategy(RNS::Type::Destination::PROVE_ALL);
+    // don't need to manualyl do this
+    //RNS::Transport::register_destination(destination);
+
+
+    
 
     // HEAD("Registering packet callback with Destination...", RNS::LOG_TRACE);
 	// 	destination.set_packet_callback(onPacket);
@@ -155,7 +242,7 @@ void RnsService::saveUserInfo() {
 }
 
 void RnsService::announce() {
-    if (destination) {
+    if (lxmf_delivery_src) {
 		HEAD("Announcing destination...", RNS::LOG_TRACE);
 		//destination.announce(RNS::bytesFromString(fruits[RNS::Cryptography::randomnum() % 7]));
 		// test path
@@ -177,7 +264,7 @@ void RnsService::announce() {
         }
         Serial.println("\n END ANNOUNCE MSGPACK-------");
         TRACE("LoRaInterface: announce bytes written = " + std::to_string(bytesWritten) + " ........");
-		destination.announce(RNS::bytesFromChunk(buffer, bytesWritten), false, lora_interface);
+		lxmf_delivery_src.announce(RNS::bytesFromChunk(buffer, bytesWritten), false, lora_interface);
 	}
 }
 
@@ -189,6 +276,7 @@ void RnsService::tick() {
         Serial.println("RNS ANNOUNCE");
         announce();
         last_announce = now;
+        reticulum.should_persist_data();
     }
      lora_interface_impl->tick(lora_interface);
 }

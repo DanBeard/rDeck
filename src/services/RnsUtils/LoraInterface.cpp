@@ -30,9 +30,9 @@ bool LoRaInterface::start() {
         .bandwidth =  250.000F,
         .sf = 7,
         .cr = 8,
-        .power = 22,
-        .preamble_len = 18,
-        .crc = 2,
+        .power = 16,
+        .preamble_len = 8,
+        .crc = 0,
         .explicitHeader = true
     };
     bool error =  _lora->startLora(config);
@@ -57,10 +57,11 @@ void LoRaInterface::tick(RNS::Interface& interface) {
 		// Check for incoming packet
         size_t packet_len = _lora->packetLength();
         if(packet_len == 0) return; // no packet -- exit
+
         Serial.println("Lora Packet Recv!");
         Serial.println(packet_len);
 
-        uint8_t lora_packet[MAX_LORA_PACKET_SIZE];
+        uint8_t lora_packet[MAX_LORA_PACKET_SIZE+1];
         if(_lora->read(lora_packet, packet_len))  {
             Serial.print(F("ERROR: LoRa READ ERROR "));
             return;
@@ -107,7 +108,6 @@ static uint8_t next_header_id() {
 		if (_online) { 
 			TRACE("LoRaInterface: sending " + std::to_string(data.size()) + " bytes...");
 			// Send packet
-            // TODO: Non blocking interrupt driven would be a MUCH better user expeirence. But more complex
             uint8_t header  = next_header_id(); //random(256) & 0xF0; <--- old code. But this should be faster and more predictable
             if(data.size() > MAX_LORA_PACKET_SIZE - LORA_HEADER_SIZE) {
                 header = header | LORA_FLAG_SPLIT;

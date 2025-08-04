@@ -7,7 +7,7 @@
 #include "retHal/Lora/BaseLora.h"
 
 
-#define MAX_LORA_PACKET_SIZE 255
+#define MAX_LORA_PACKET_SIZE 256
 #define LORA_HEADER_SIZE 1
 #define LORA_FLAG_SPLIT 0x01
 
