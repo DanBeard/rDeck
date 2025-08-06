@@ -31,6 +31,51 @@ const forward_list<AppInfo>& RetOS::appInfo() const {
     return _appInfos;
 }
 
+void _ui_loop(void* _) {
+    RetOS* retos = retOsGlobalPtr;
+    delay(250);
+    bool all_good;
+    do { 
+        all_good = true;
+        for(auto service : retos->_services) {
+            all_good = all_good && service->status() != STARTING;
+        }
+        delay(5);
+    } while(!all_good);
+
+
+    uint32_t tickCount = 0;
+    while(true) {
+        // slow ticks roughly every 30+ seconds?
+        if(tickCount % 10 == 0){
+            retos->_ui.slow_loop();
+        } 
+
+        // loop apps
+        if(retos->_active_app != nullptr) {
+            retos->_active_app->tick();
+        }
+        // loop UI/ timers
+        uint32_t time_till_next = lv_timer_handler();
+        lv_task_handler();
+        //if(time_till_next == LV_NO_TIMER_READY) time_till_next = 5; /*handle LV_NO_TIMER_READY. Another option is to `sleep` for longer*/
+        delay(min(time_till_next, (uint32_t) 20));    
+        tickCount++;
+    }
+}
+
+void _services_loop(void* _) {
+     RetOS* retos = retOsGlobalPtr;
+
+     delay(10);
+     while(true) {
+        for(auto service : retos->_services) {
+            service->tick();
+      }
+      delay(1);   
+     }
+}
+
 
 void RetOS::start(){
     { 
@@ -45,19 +90,6 @@ void RetOS::start(){
             _services.push_front(service);
             service->startService(this);
         }
-
-        // wait for all the services  to finish starting up
-        bool all_good = true;
-        do {
-            all_good = true;
-            for(auto service : _services) {
-                all_good = all_good && service->status() != STARTING;
-            }
-            if(!all_good) {
-                tick();
-                //delay(1);
-            }
-        } while(!all_good);
         
         // init the UI
         _ui.init();
@@ -69,8 +101,9 @@ void RetOS::start(){
         _launcher->startApp(this);
     }
 
-    // will not return from here
-    loop();
+    // let's boot up!
+    _hal.register_service_task(_services_loop);
+    _hal.register_ui_task(_ui_loop);
 
 }
 void RetOS::launchApp(int8_t id){
@@ -124,37 +157,6 @@ void RetOS::backToLauncher(){
     
 }
 
-uint32_t RetOS::tick() {
-            // loop services
-            for(auto service : _services) {
-                service->tick();
-            }
-            // loop apps
-            if(_active_app != nullptr) {
-                _active_app->tick();
-            }
-            // loop UI/ timers
-            uint32_t time_till_next = lv_timer_handler();
-            lv_task_handler();
-            //Serial.printf("tick %u -- ", time_till_next);
-            return time_till_next;
-}
-
-void RetOS::loop() {
-    uint32_t tickCount = 0;
-    while(true) {
-        // slow ticks roughly every 30 seconds?
-        if(tickCount % 10 == 0){
-            _ui.slow_loop();
-        } 
-
-        uint32_t time_till_next = tick();
-        if(time_till_next == LV_NO_TIMER_READY) time_till_next = 5; /*handle LV_NO_TIMER_READY. Another option is to `sleep` for longer*/
-        //delay(time_till_next);    
-        delay(1);   
-        tickCount++;
-    }
-}
 
 static void delay_timer(lv_timer_t * timer) {
     std::function<void()> *func = (std::function<void()> *)timer->user_data;
@@ -189,4 +191,6 @@ void RetOS::initHardware(){
     if(_hal.lora) {
         _hal.lora->initLora();
     }
+
+
 }

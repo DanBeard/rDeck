@@ -26,6 +26,7 @@ RetOS retos(BOARD_HAL, services, apps, launcherFactory);
 void setup() {
      BOARD_INIT
      setCpuFrequencyMhz(240);
+     retos.start();
 
 //     Serial.begin(115200);
     
@@ -41,7 +42,5 @@ void setup() {
 
 
 void loop() {
-    // retos takes control from here
-    // will not return.
-     retos.start();
+     
 }

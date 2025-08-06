@@ -16,13 +16,29 @@ TDeckProBattery bat;
 TDeckProGPS gps;
 TDeckProLora lora;
 
+TaskHandle_t uiTask;
+TaskHandle_t servicesTask;
+
+
+void register_ui_task(RetTask task) {
+   xTaskCreatePinnedToCore(task, "UITask", 10000, NULL, 1, &uiTask, 1);
+}
+
+void register_service_task(RetTask task) {
+    xTaskCreatePinnedToCore(task, "ServiceTask", 10000, NULL, 2, &servicesTask, 1);
+}
+
+
 RetHal tDeckProHal = {
     .screen = &screen,
     .fs     = &SD,
     .keyboard = &kb,
     .battery = &bat,
     .gps = &gps,
-    .lora = &lora
+    .lora = &lora,
+
+    .register_ui_task = (register_ui_task),
+    .register_service_task = (register_service_task), 
 };
 
 // board init

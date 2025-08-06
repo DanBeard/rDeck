@@ -54,43 +54,41 @@ void LoRaInterface::stop() {
 void LoRaInterface::tick(RNS::Interface& interface) {
 
 	if (_online) {
-		// Check for incoming packet
-        size_t packet_len = _lora->packetLength();
-        if(packet_len == 0) return; // no packet -- exit
+        while(_lora->hasPacket()) { 
+            Serial.println("Lora Packet Recv!");
 
-        Serial.println("Lora Packet Recv!");
-        Serial.println(packet_len);
-
-        uint8_t lora_packet[MAX_LORA_PACKET_SIZE+1];
-        if(_lora->read(lora_packet, packet_len))  {
-            Serial.print(F("ERROR: LoRa READ ERROR "));
-            return;
-        }
-        
-        uint8_t header = lora_packet[0];
-        uint8_t sequence = header >> 4;
-        bool is_split = header & LORA_FLAG_SPLIT;
-        //Serial.print(_lora->getRSSI());
-
-        // if we're NOT waiting for another split packet
-        // or we are but this one isn't split
-        // or we are but one isn't the one we're waiting for
-        // then treat it like the start of a new RNS packet
-        if(_seq == SEQ_UNSET || !is_split || (_seq != sequence && _seq != SEQ_UNSET)) { 
-             buffer.assign(lora_packet + 1, packet_len-1);   
-            // if we're not split then it's simple. Just handle the packet;
-            if(!is_split) {
-                _seq = SEQ_UNSET; // not waiting for anything any more
-                interface.handle_incoming(buffer);
-                // TODO Clear buffer to free up heap?
-            } else {
-                // if we're a split packet then cache it and wait for the next packet
-                _seq = sequence;
+            uint8_t lora_packet[MAX_LORA_PACKET_SIZE+1];
+            size_t packet_len = _lora->read(lora_packet, MAX_LORA_PACKET_SIZE);
+            if(packet_len == 0)  {
+                Serial.print(F("ERROR: LoRa READ ERROR "));
+                return;
             }
-        } else {
-            // we must be waiting, this is the one we're waiting for and this is the second half
-            buffer.append(lora_packet + 1, packet_len-1);
-            interface.handle_incoming(buffer);
+            
+            uint8_t header = lora_packet[0];
+            uint8_t sequence = header >> 4;
+            bool is_split = header & LORA_FLAG_SPLIT;
+            //Serial.print(_lora->getRSSI());
+
+            // if we're NOT waiting for another split packet
+            // or we are but this one isn't split
+            // or we are but one isn't the one we're waiting for
+            // then treat it like the start of a new RNS packet
+            if(_seq == SEQ_UNSET || !is_split || (_seq != sequence && _seq != SEQ_UNSET)) { 
+                buffer.assign(lora_packet + 1, packet_len-1);   
+                // if we're not split then it's simple. Just handle the packet;
+                if(!is_split) {
+                    _seq = SEQ_UNSET; // not waiting for anything any more
+                    interface.handle_incoming(buffer);
+                    // TODO Clear buffer to free up heap?
+                } else {
+                    // if we're a split packet then cache it and wait for the next packet
+                    _seq = sequence;
+                }
+            } else {
+                // we must be waiting, this is the one we're waiting for and this is the second half
+                buffer.append(lora_packet + 1, packet_len-1);
+                interface.handle_incoming(buffer);
+            }
         }
 	}
 }

@@ -78,8 +78,8 @@ protected:
     forward_list<ServiceInfo> _serviceInfos;
     forward_list<AppInfo> _appInfos;
 
-    uint32_t tick();
-    void loop();
+    friend void _ui_loop(void *);
+    friend void _services_loop(void *);
 
     void initHardware();
 

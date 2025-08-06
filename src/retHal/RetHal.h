@@ -7,6 +7,9 @@
 #include "GPS/BaseGPS.h"
 #include "Lora/BaseLora.h"
 
+
+typedef void (*RetTask)(void *);
+
 struct RetHal {
 
     // required peropherals. The system assumes these are here even if they are stubbed out
@@ -18,5 +21,15 @@ struct RetHal {
     BaseBattery* battery;
     BaseGPS*     gps;
     BaseLora* lora;
+
+    // register the main ui task that handles the active app
+    // and UI drawing
+    void (*register_ui_task)(RetTask task);
+
+    // register the services task that handles running services
+    // this should be higher priority than the ui task if possible
+
+    void (*register_service_task)(RetTask task);
+
 
 };

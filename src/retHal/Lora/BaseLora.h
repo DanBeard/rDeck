@@ -20,9 +20,8 @@ public:
     virtual void initLora() = 0;
     virtual bool startLora(LoraConfig config) = 0;
     virtual bool hasPacket() = 0;
-    virtual size_t packetLength() = 0;
-    // true = error
-    virtual bool read(uint8_t* data, uint32_t len) = 0;
+    // returns size put in buffer. 0 on error or no packet in buf
+    virtual size_t read(uint8_t* data, uint32_t len) = 0;
     virtual bool transmit(uint8_t* data, uint32_t len) = 0;
     virtual float getRSSI() = 0;
 
