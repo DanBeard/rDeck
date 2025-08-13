@@ -18,6 +18,7 @@
 
 class RnsService: public BaseService {
     
+    friend class LoraInterface;
 
 
 public:

@@ -4,6 +4,9 @@
 
 /*virtual */ void NotesApp::start(RetOS* retos) {
 
+    // don't sleep while this app is open
+    _keep_awake = true;
+
     ta = lv_textarea_create(screen);
     lv_group_add_obj(retos->ui()->default_input_group(), ta);
 

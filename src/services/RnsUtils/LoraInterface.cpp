@@ -2,12 +2,13 @@
 #include <memory>
 #include <Log.h>
 #include <algorithm>
+#include "../RnsService.h"
 
 using namespace RNS;
 using namespace RNS::Interfaces;
 
 
-LoRaInterface::LoRaInterface(BaseLora* lora ) : _lora(lora), InterfaceImpl("Lora") {
+LoRaInterface::LoRaInterface(BaseLora* lora, RnsService* service ) : _lora(lora), _rns_service(service), InterfaceImpl("Lora") {
 
 	_IN = true;
 	_OUT = true;
@@ -56,7 +57,8 @@ void LoRaInterface::tick(RNS::Interface& interface) {
 	if (_online) {
         while(_lora->hasPacket()) { 
             Serial.println("Lora Packet Recv!");
-
+            // no action on plain recv or in noisey environments we'll never sleep
+                //_rns_service->actionHappened();
             uint8_t lora_packet[MAX_LORA_PACKET_SIZE+1];
             size_t packet_len = _lora->read(lora_packet, MAX_LORA_PACKET_SIZE);
             if(packet_len == 0)  {
@@ -79,7 +81,6 @@ void LoRaInterface::tick(RNS::Interface& interface) {
                 if(!is_split) {
                     _seq = SEQ_UNSET; // not waiting for anything any more
                     interface.handle_incoming(buffer);
-                    // TODO Clear buffer to free up heap?
                 } else {
                     // if we're a split packet then cache it and wait for the next packet
                     _seq = sequence;
@@ -101,6 +102,7 @@ static uint8_t next_header_id() {
 };
 
 /*virtual*/ void LoRaInterface::send_outgoing(const Bytes& data) {
+    _rns_service->actionHappened();
 	DEBUG(toString() + ".on_outgoing: data: " + data.toHex());
 	try {
 		if (_online) { 

@@ -1,5 +1,5 @@
 #pragma once
-
+#include <Arduino.h>
 #include <ArduinoJson.h>
 #include "../retOS/retOS.h"
 #include "../retOS/Events.h"
@@ -29,12 +29,17 @@ protected:
     lv_obj_t* screen; // the LVGL screen for this app to draw on. If you stay inside these bounds you don't mess up OS widgets
     virtual void start(RetOS* retos) = 0; // called after construction once the UI is ready to be drawn on
 
+    uint64_t _lastActionTime = 0;
+    bool _keep_awake = false; //keep dek awake while this app is active. REALLY bad for battery life!
+    void actionHappened(){_lastActionTime = millis();}
+
 public:
     void startApp(RetOS* retos);
     
     virtual void tick() = 0; // called periodically by OS so you can do work. TIme varies by sleep and power level.
     virtual void stop() = 0; // called when the app is closed, before destruction
-
+    uint64_t timeOfLastAction() { return _lastActionTime;}// returns the time of the last action in millis(). Used for sleep calculations
+    bool keepAwake() const {return _keep_awake;}
     virtual EventStatus onEvent(Event& event) = 0;
 
     const uint8_t id() const;

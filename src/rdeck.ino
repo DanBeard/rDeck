@@ -1,5 +1,5 @@
-#include <Arduino.h>
 #include "rdeck.h"
+#include <Arduino.h>
 #include "retOS/retOS.h"
 #include "apps/apps.h"
 #include "services/services.h"
@@ -13,8 +13,8 @@
 
 forward_list<AppInfo> apps= {AppFactory<HelloWorld>("HW", &img_setting), AppFactory<NotesApp>("Notes", &img_test)};
 forward_list<ServiceInfo> services = {
-      ServiceFactory<GPSService>(),
-      ServiceFactory<RnsService>(), 
+     ServiceFactory<GPSService>(),
+     ServiceFactory<RnsService>(), 
      };
 
 // main app that launches other apps
@@ -25,7 +25,7 @@ RetOS retos(BOARD_HAL, services, apps, launcherFactory);
 
 void setup() {
      BOARD_INIT
-     setCpuFrequencyMhz(240);
+     //setCpuFrequencyMhz(240);
      retos.start();
 
 //     Serial.begin(115200);

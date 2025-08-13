@@ -46,9 +46,11 @@ void _ui_loop(void* _) {
 
     uint32_t tickCount = 0;
     while(true) {
-        // slow ticks roughly every 30+ seconds?
+        // slow ticks roughly every ~1-5 seconds
         if(tickCount % 10 == 0){
             retos->_ui.slow_loop();
+            // maybe light sleep()
+            retos->maybeLightSleep();
         } 
 
         // loop apps
@@ -190,6 +192,45 @@ void RetOS::initHardware(){
 
     if(_hal.lora) {
         _hal.lora->initLora();
+    }
+
+
+}
+
+static uint64_t last_sleep = 0;
+void RetOS::maybeLightSleep() {
+    uint64_t last_action = 0;
+    uint64_t now = millis();
+
+    // loop through all the apps and services and hardware
+    if(_active_app != nullptr) {
+        if(_active_app->keepAwake()) return;
+        last_action = _active_app->timeOfLastAction();
+        if(last_action > now) last_action = 0; // rollover protection
+    }
+
+    // services
+    for(auto service : _services) {
+            uint64_t last_service_action = service->timeOfLastAction();
+            if(last_service_action <= now && last_service_action > last_action) {
+                last_action = last_service_action;
+            }
+    }
+
+    // hardware
+    uint64_t last_hardware_action = _hal.time_of_last_action();
+    if(last_hardware_action<= now && last_hardware_action > last_action) {
+        last_action = last_hardware_action;
+    }
+
+    //TODO Draw a sleep notification so the user knows we're asleep and will tap the screen
+    if(last_sleep == 0) {
+        // on first boot give more time since user is probablt using it
+        last_action += RETOS_LIGHT_SLEEP_AFTER_MS*2;
+    }
+    if(last_action + RETOS_LIGHT_SLEEP_AFTER_MS < now) { 
+        last_sleep = now;
+        _hal.light_sleep();
     }
 
 

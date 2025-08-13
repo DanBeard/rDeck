@@ -7,6 +7,8 @@
 #include "retUI.h"
 #include <ArduinoJson.h>
 
+#define RETOS_LIGHT_SLEEP_AFTER_MS (10*1000)
+
 using namespace std;
 
 class BaseApp;
@@ -82,6 +84,7 @@ protected:
     friend void _services_loop(void *);
 
     void initHardware();
+    void maybeLightSleep();
 
 };
 

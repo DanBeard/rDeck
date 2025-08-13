@@ -11,13 +11,14 @@
 #define LORA_HEADER_SIZE 1
 #define LORA_FLAG_SPLIT 0x01
 
+class RnsService;
 
 namespace RNS { namespace Interfaces {
 
     class LoRaInterface : public InterfaceImpl {
 
 	public:
-		LoRaInterface(BaseLora*);
+		LoRaInterface(BaseLora*, RnsService*);
 		//z def get_address_for_if(name):
 		//z def get_broadcast_for_if(name):
 
@@ -43,6 +44,7 @@ namespace RNS { namespace Interfaces {
         //bool _is_transmitting = false; // For non-blocking transmit
 
 		BaseLora* _lora;
+		RnsService* _rns_service;
 		static const uint8_t SEQ_UNSET = 0xFF;
 		uint8_t _seq = SEQ_UNSET;
 		uint8_t* _split_buf = nullptr;

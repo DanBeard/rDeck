@@ -25,15 +25,20 @@ protected:
     RetOS* _retos; // pointer to the os object
     ServiceStatus _status = STARTING;
 
-    
+    uint64_t _lastActionTime = 0;
+
 
 public:
     BaseService(const uint8_t id);
     virtual void start(RetOS* retos)=0; // called after construction once the OS is ready to launch services
     virtual void tick() = 0; // called periodically by OS so you can do work. TIme varies by sleep and power level.
+
     virtual EventStatus onEvent(Event& event) = 0;
 
     const uint8_t id() const;
     const ServiceStatus status() const;
     void startService(RetOS* retos);
+
+    void actionHappened(){_lastActionTime = millis();} // public so helpers can access it
+    uint64_t timeOfLastAction() const { return _lastActionTime;}// returns the time of the last action in millis(). Used for sleep calculations
 };

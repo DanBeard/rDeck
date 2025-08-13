@@ -12,6 +12,8 @@
 #define KEYPAD_RELEASE_VAL_MIN 1
 #define KEYPAD_RELEASE_VAL_MAX 35
 
+extern uint64_t time_of_last_action;
+
 const char keymap[KEYPAD_ROWS][KEYPAD_COLS] = {
     {'q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p'},
     {'a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', LV_KEY_BACKSPACE}, //backspace
@@ -70,6 +72,7 @@ static void lvgl_keyboard_read(lv_indev_drv_t * indev, lv_indev_data_t * data){
         col = (KEYPAD_COLS-1) - k % KEYPAD_COLS;
         c = keymap[row][col];
         //Serial.printf("k=%d, v=%d, press:%d, %d, %c\n", k, v, row, col, c);
+        time_of_last_action = millis();
     }
 
     data->state = state;

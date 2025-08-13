@@ -31,5 +31,10 @@ struct RetHal {
 
     void (*register_service_task)(RetTask task);
 
+    // time of last action in hardware. used for sleep calculations
+    uint64_t (*time_of_last_action)();
+    
+    void (*light_sleep)();
+
 
 };

@@ -14,6 +14,7 @@ void GPSService::tick() {
     if(newIsValid != isValid){
         updateIcon(newIsValid);
         isValid = newIsValid;
+        this->actionHappened(); // only update our action timer if we had a status change
     }
 
     // TODO sync up RTC with the GPS time and keep track so we know the real time

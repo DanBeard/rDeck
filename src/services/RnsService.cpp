@@ -131,7 +131,7 @@ void RnsService::start(RetOS* retos){
     _lora = hal.lora;
     _fs = hal.fs;
 
-    lora_interface_impl = new RNS::Interfaces::LoRaInterface(_lora);
+    lora_interface_impl = new RNS::Interfaces::LoRaInterface(_lora, this);
     lora_interface = RNS::Interface(lora_interface_impl);
     rns_fs = new FileSystem();
     ((FileSystem*)rns_fs.get())->init();
