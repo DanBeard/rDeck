@@ -28,10 +28,6 @@
     
 }
 
-/*virtual*/ EventStatus Launcher::onEvent(Event& event){
-    return IGNORED;
-}
-
 static void menu_btn_event_cb(lv_event_t *e)
 {
     uint32_t id = (uint32_t)e->user_data;

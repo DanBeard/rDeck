@@ -31,6 +31,3 @@ void GPSService::updateIcon(bool status){
     };
     _retos->ui()->setServiceIcon(iconInfo);
 }
-EventStatus GPSService::onEvent(Event& event){
-     return IGNORED;
-}

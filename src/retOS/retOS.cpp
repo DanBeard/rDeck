@@ -3,6 +3,7 @@
 #include "../apps/BaseApp.h"
 #include <lvgl.h>
 
+
 using namespace std;
 RetOS* retOsGlobalPtr;
 
@@ -42,7 +43,6 @@ void _ui_loop(void* _) {
         }
         delay(5);
     } while(!all_good);
-
 
     uint32_t tickCount = 0;
     while(true) {
@@ -150,7 +150,6 @@ void RetOS::backToLauncher(){
                 _active_app = nullptr;
             }
 
-            StaticJsonDocument<0> args;
             _launcher->startApp(this);
             _ui.showAppScreen();
             _ui.hideBackButton();
@@ -171,6 +170,40 @@ void  RetOS::run_later(std::function<void()> func, uint32_t ms) {
     std::function<void()> *heap_func = new std::function<void()>(func);
     lv_timer_t * timer = lv_timer_create(delay_timer, ms,  heap_func);
     lv_timer_set_repeat_count(timer, 1);
+}
+
+void RetOS::publishEvent(const Event& e) {
+    // events should only come from services, so just run the service handlers in this current context.
+    bool handled = false;
+    for(auto service : _services) {
+        EventStatus status = service->onEvent(e);
+        if(status == HANDLED)  {
+            handled = true;
+            break;
+        }
+      }
+
+      if(!handled && this->_active_app != nullptr) {
+        // the app is in the UI task, so queue up it's handler using lvgl so its run in the UI task
+            run_later([e, this](){
+                if(this->_active_app != nullptr) { // double check since time has passed
+                    this->_active_app->onEvent(e);
+                }
+            },1);
+      }
+      
+    // always call the OS handlers, even if a service handled it    
+    this->onEvent(e);
+}
+
+// the OS's own event handler
+void RetOS::onEvent(const Event& e) {
+    switch(e.type) {
+        case RAW_GPS_TIME: {
+
+        }
+        break;
+    }
 }
 
 void RetOS::initHardware(){
@@ -194,7 +227,7 @@ void RetOS::initHardware(){
         _hal.lora->initLora();
     }
 
-
+    
 }
 
 static uint64_t last_sleep = 0;
@@ -223,7 +256,7 @@ void RetOS::maybeLightSleep() {
         last_action = last_hardware_action;
     }
 
-    //TODO Draw a sleep notification so the user knows we're asleep and will tap the screen
+    //TODO Draw a sleep notification so the user knows we're asleep and will tap a button or something
     if(last_sleep == 0) {
         // on first boot give more time since user is probablt using it
         last_action += RETOS_LIGHT_SLEEP_AFTER_MS*2;

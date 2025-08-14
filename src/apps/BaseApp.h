@@ -40,7 +40,7 @@ public:
     virtual void stop() = 0; // called when the app is closed, before destruction
     uint64_t timeOfLastAction() { return _lastActionTime;}// returns the time of the last action in millis(). Used for sleep calculations
     bool keepAwake() const {return _keep_awake;}
-    virtual EventStatus onEvent(Event& event) = 0;
+    virtual EventStatus onEvent(const Event& event);
 
     const uint8_t id() const;
 

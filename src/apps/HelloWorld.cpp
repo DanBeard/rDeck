@@ -22,7 +22,3 @@
 /*virtual */ void HelloWorld::stop() {
     
 }
-
-/*virtual*/ EventStatus HelloWorld::onEvent(Event& event){
-    return IGNORED;
-}

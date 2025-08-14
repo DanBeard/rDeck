@@ -8,9 +8,8 @@ class GPSService: public BaseService {
 
 public:
 
-    virtual void start(RetOS* retos); // called after construction once the OS is ready to launch services
-    virtual void tick(); // called periodically by OS so you can do work. TIme varies by sleep and power level.
-    virtual EventStatus onEvent(Event& event);
+    virtual void start(RetOS* retos) override; // called after construction once the OS is ready to launch services
+    virtual void tick() override; // called periodically by OS so you can do work. TIme varies by sleep and power level.
 
     bool isValid = false;
 

@@ -32,6 +32,7 @@ void loraTask(void* in) {
     // init the radio
     Serial.println("Starting Lora retHAL");
     LoraConfig& config = lora->config;
+    delay(20);
 
     int state = radio.begin(config.frequency, config.bandwidth, config.sf, config.cr, 0x12, config.power, config.preamble_len);
     if (state == RADIOLIB_ERR_NONE) {
@@ -56,6 +57,7 @@ void loraTask(void* in) {
         while(1) {
             Serial.println("ERROR: Starting Lora retHAL");
             Serial.println(state);
+            delay(100);
         }
     }
     Serial.println("Finished Lora Rethal");

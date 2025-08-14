@@ -68,6 +68,3 @@
     file.close();
 }
 
-/*virtual*/ EventStatus NotesApp::onEvent(Event& event){
-    return IGNORED;
-}

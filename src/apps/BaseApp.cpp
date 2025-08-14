@@ -18,3 +18,7 @@ const uint8_t BaseApp::id() const
 {
     return _id;
 }
+
+EventStatus BaseApp::onEvent(const Event& event) {
+    return IGNORED;
+}

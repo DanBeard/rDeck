@@ -11,7 +11,12 @@
 // #include <TouchDrvCSTXXX.hpp>
 // TouchDrvCSTXXX touch;
 
-forward_list<AppInfo> apps= {AppFactory<HelloWorld>("HW", &img_setting), AppFactory<NotesApp>("Notes", &img_test)};
+forward_list<AppInfo> apps= {
+     AppFactory<HelloWorld>("HW", &img_setting), 
+     AppFactory<NotesApp>("Notes", &img_test),  
+//     AppFactory<Settings>("Settings", &img_setting)
+};
+
 forward_list<ServiceInfo> services = {
      ServiceFactory<GPSService>(),
      ServiceFactory<RnsService>(), 

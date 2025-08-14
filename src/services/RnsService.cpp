@@ -289,6 +289,3 @@ void RnsService::updateIcon(bool status){
     };
     _retos->ui()->setServiceIcon(iconInfo);
 }
-EventStatus RnsService::onEvent(Event& event){
-     return IGNORED;
-}

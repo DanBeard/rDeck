@@ -10,6 +10,5 @@ class HelloWorld : public BaseApp {
     virtual void tick();
     virtual void stop();
 
-    virtual EventStatus onEvent(Event& event);
 
 };

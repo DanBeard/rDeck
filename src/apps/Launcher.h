@@ -11,7 +11,6 @@ public:
     virtual void tick();
     virtual void stop();
 
-    virtual EventStatus onEvent(Event& event);
 
 protected:
     const RetUI* _ui;

@@ -23,9 +23,8 @@ class RnsService: public BaseService {
 
 public:
     explicit RnsService(uint8_t id);
-    virtual void start(RetOS* retos); // called after construction once the OS is ready to launch services
-    virtual void tick(); // called periodically by OS so you can do work. Time varies by sleep and power level.
-    virtual EventStatus onEvent(Event& event);
+    virtual void start(RetOS* retos) override; // called after construction once the OS is ready to launch services
+    virtual void tick() override; // called periodically by OS so you can do work. Time varies by sleep and power level but ~1-3ms while awake
     void announce();
 
     bool isValid = false;

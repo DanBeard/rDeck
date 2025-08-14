@@ -17,3 +17,8 @@ const uint8_t BaseService::id() const {
 const ServiceStatus BaseService::status() const{
         return _status;
 }
+
+
+EventStatus BaseService::onEvent(const Event& event) {
+    return IGNORED;
+}

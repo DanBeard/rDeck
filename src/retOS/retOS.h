@@ -5,9 +5,11 @@
 
 #include "retHal/RetHal.h"
 #include "retUI.h"
+#include "Events.h"
 #include <ArduinoJson.h>
+#include "./retosUtils/TimeHelper.h"
 
-#define RETOS_LIGHT_SLEEP_AFTER_MS (10*1000)
+#define RETOS_LIGHT_SLEEP_AFTER_MS (1000*1000)
 
 using namespace std;
 
@@ -49,6 +51,8 @@ template<class T> AppInfo AppFactory(const char *name, const void* icon) {
 };
 
 
+class DateTimeService;
+
 class RetOS {
 
 public:
@@ -64,9 +68,14 @@ public:
     void launchApp(int8_t id);
     void backToLauncher();
 
+    // expected to be called in the services task ONLY!!!
+    void publishEvent(const Event& e);
+
     // run the functor after ms milliseconds
     // THis function takes control of the functor and will delete the ptr after it's run
     void run_later(std::function<void()> func, uint32_t ms);
+
+    TimeHelper time;
 
 protected:
     BaseApp* _active_app = nullptr;
@@ -82,6 +91,8 @@ protected:
 
     friend void _ui_loop(void *);
     friend void _services_loop(void *);
+
+    void onEvent(const Event& e);
 
     void initHardware();
     void maybeLightSleep();
