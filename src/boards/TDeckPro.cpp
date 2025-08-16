@@ -30,6 +30,7 @@ void register_service_task(RetTask task) {
 
 uint64_t time_of_last_action = 0;
 uint64_t time_of_last_action_getter() {
+    
     return time_of_last_action;
 }
 
@@ -56,7 +57,7 @@ void light_sleep() {
     //gpio_wakeup_enable(buttonPin1, GPIO_INTR_HIGH_LEVEL); // Trigger wake-up on high level
     //gpio_wakeup_enable(buttonPin2, GPIO_INTR_HIGH_LEVEL); // Trigger wake-up on high level
     // Enable wake-up by timer
-    const uint64_t sleepTime = 1000000*5;  // Sleep duration in microseconds (2 seconds)
+    const uint64_t sleepTime = 1000000*5;  // Sleep duration in microseconds (5 seconds)
     esp_err_t result = esp_sleep_enable_timer_wakeup(sleepTime);
 
     if (result == ESP_OK) {
@@ -90,8 +91,12 @@ RetHal tDeckProHal = {
 TouchDrvCSTXXX tDeckProTouch;
 
 
-
 void tDeckBoardInit() {
+
+        // operate as fast as possible while awake.
+    // We will light sleep during inactive periods to save battery
+    setCpuFrequencyMhz(240);
+
      // LORA、SD、EPD use the same SPI, in order to avoid mutual influence;
     // before powering on, all CS signals should be pulled high and in an unselected state;
     pinMode(BOARD_EPD_CS, OUTPUT); 
@@ -163,6 +168,8 @@ void tDeckBoardInit() {
     if(!SD.begin(BOARD_SD_CS)){
         Serial.println("[SD CARD] Card Mount Failed");
     }
+
+
 
 
     // TODO

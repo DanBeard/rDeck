@@ -61,7 +61,7 @@ void _ui_loop(void* _) {
         uint32_t time_till_next = lv_timer_handler();
         lv_task_handler();
         //if(time_till_next == LV_NO_TIMER_READY) time_till_next = 5; /*handle LV_NO_TIMER_READY. Another option is to `sleep` for longer*/
-        delay(min(time_till_next, (uint32_t) 20));    
+        delay(min(time_till_next, (uint32_t) 5));    
         tickCount++;
     }
 }
@@ -110,11 +110,8 @@ void RetOS::start(){
 }
 void RetOS::launchApp(int8_t id){
     _ui.showLoadingScreen();
-    // TODO: Lots of Heap anc copy shenanigans here. But its only when launching an app
-    // Profile and see if we need to clean it up. Do we even need the args anymore?
-    // Could save space and time by removing them!!
 
-    // give the loading screen one frame before actuallying do the launching
+    // give the loading screen some frames before actuallying do the launching
     run_later([this, id]() {
         // clean up current app
     if(_active_app) {
@@ -136,7 +133,7 @@ void RetOS::launchApp(int8_t id){
 
     // oops, we didn't find it? just go back to launcher then
     backToLauncher();
-    }, 16);
+    }, 90);
     
 }
 void RetOS::backToLauncher(){
@@ -207,14 +204,19 @@ void RetOS::onEvent(const Event& e) {
 }
 
 void RetOS::initHardware(){
-    // Screen
-    _hal.screen->initScreen();
-    _hal.screen->drawStartupScreen();
-    _hal.screen->initLvgl();
 
-    _hal.keyboard->initKeyboard();
-    _hal.keyboard->initLvgl();  
-    
+    if(_hal.screen) {
+        // Screen
+        _hal.screen->initScreen();
+        _hal.screen->drawStartupScreen();
+        _hal.screen->initLvgl();
+    }
+
+    if(_hal.keyboard) {
+        _hal.keyboard->initKeyboard();
+        _hal.keyboard->initLvgl();
+    }
+  
     if(_hal.battery) {
         _hal.battery->initBattery();
     }
@@ -227,7 +229,6 @@ void RetOS::initHardware(){
         _hal.lora->initLora();
     }
 
-    
 }
 
 static uint64_t last_sleep = 0;
@@ -263,7 +264,9 @@ void RetOS::maybeLightSleep() {
     }
     if(last_action + RETOS_LIGHT_SLEEP_AFTER_MS < now) { 
         last_sleep = now;
+#ifndef SKIP_SLEEP
         _hal.light_sleep();
+#endif
     }
 
 

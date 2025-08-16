@@ -6,15 +6,12 @@
 #include "assets/assets.h"
 
 // board config
- #include "boards/TDeckPro.h"
-// #include "utilities.h"
-// #include <TouchDrvCSTXXX.hpp>
-// TouchDrvCSTXXX touch;
+#include "boards/board.h"
 
 forward_list<AppInfo> apps= {
      AppFactory<HelloWorld>("HW", &img_setting), 
      AppFactory<NotesApp>("Notes", &img_test),  
-//     AppFactory<Settings>("Settings", &img_setting)
+   AppFactory<Settings>("Settings", &img_setting)
 };
 
 forward_list<ServiceInfo> services = {
@@ -30,18 +27,7 @@ RetOS retos(BOARD_HAL, services, apps, launcherFactory);
 
 void setup() {
      BOARD_INIT
-     //setCpuFrequencyMhz(240);
      retos.start();
-
-//     Serial.begin(115200);
-    
-//     touch.setPins(BOARD_TOUCH_RST, BOARD_TOUCH_INT);
-//     bool hasTouch = touch.begin(Wire, BOARD_I2C_ADDR_TOUCH, BOARD_TOUCH_SDA, BOARD_TOUCH_SCL);
-//     if (!hasTouch) {
-//         Serial.println("Failed to find Capacitive Touch !");
-//     } else {
-//         Serial.println("Find Capacitive Touch");
-//     }
 
 }
 

@@ -10,8 +10,8 @@
     // draw all of the apps
     uint8_t i = 0;
     for (AppInfo app: retos->appInfo()) {
-        uint8_t x = 23+(i%3*72);
-        uint8_t y = 23 + (i/3) * 88;
+        uint8_t x = 20 + (i%3 * 72);
+        uint8_t y = 8 + (i/3) * 88;
         Serial.printf("Creating btn for %s  %d - %d, %d", app.name, i,x, y );
         Serial.println("");
         menu_btn_create(screen, app, x, y);

@@ -32,7 +32,7 @@ void loraTask(void* in) {
     // init the radio
     Serial.println("Starting Lora retHAL");
     LoraConfig& config = lora->config;
-    delay(20);
+    delay(1000);
 
     int state = radio.begin(config.frequency, config.bandwidth, config.sf, config.cr, 0x12, config.power, config.preamble_len);
     if (state == RADIOLIB_ERR_NONE) {

@@ -48,6 +48,9 @@ void RetUI::init() {
     lv_obj_set_width(_app_screen, lv_pct(100));
     lv_obj_set_flex_grow(_app_screen, 1);
     lv_obj_set_style_pad_top(_app_screen, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_left(_app_screen, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_right(_app_screen, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_bottom(_app_screen, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
 
 
     Serial.println("Initing UI...");

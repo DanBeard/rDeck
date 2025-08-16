@@ -10,6 +10,7 @@
 #include "./retosUtils/TimeHelper.h"
 
 #define RETOS_LIGHT_SLEEP_AFTER_MS (1000*1000)
+#define SKIP_SLEEP
 
 using namespace std;
 
