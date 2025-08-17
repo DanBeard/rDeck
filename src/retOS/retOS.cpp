@@ -151,7 +151,7 @@ void RetOS::backToLauncher(){
             _ui.showAppScreen();
             _ui.hideBackButton();
             // launcher is NOT set to active app so it never really gets deleted. Just hidden.
-     }, 16);
+     }, 25);
     
 }
 

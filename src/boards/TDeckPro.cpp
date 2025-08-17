@@ -21,7 +21,10 @@ TaskHandle_t servicesTask;
 
 
 void register_ui_task(RetTask task) {
-   xTaskCreatePinnedToCore(task, "UITask", 10000, NULL, 1, &uiTask, 1);
+   //xTaskCreatePinnedToCore(task, "UITask", 10000, NULL, 1, &uiTask, 1);
+
+   // call the ui task directly. Ui thread IS main thread
+   task(NULL);
 }
 
 void register_service_task(RetTask task) {

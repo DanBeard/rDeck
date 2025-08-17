@@ -34,6 +34,8 @@ public:
 
     RNS::Destination lxmf_delivery_src;
     RNS::Reticulum reticulum;
+
+    static bool drawSettings(lv_obj_t * column, Settings* settings);
     
 
 protected:

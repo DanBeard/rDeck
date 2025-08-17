@@ -6,6 +6,8 @@
 
 using namespace std;
 
+class Settings;
+
 enum ServiceStatus {
     STARTING = 0, // initializing. This WILL block startup since services should use async methods
     RUNNING, // running, all good dude
@@ -42,5 +44,9 @@ public:
 
     void actionHappened(){_lastActionTime = millis();} // public so helpers can access it
     uint64_t timeOfLastAction() const { return _lastActionTime;}// returns the time of the last action in millis(). Used for sleep calculations
+
+    // static trait methods . Refedine in subclass if you want to use it
+    // return true if you drew settings
+    static bool drawSettings(lv_obj_t * column, Settings* settings) { return false; }
     
 };

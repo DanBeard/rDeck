@@ -289,3 +289,8 @@ void RnsService::updateIcon(bool status){
     };
     _retos->ui()->setServiceIcon(iconInfo);
 }
+
+bool RnsService::drawSettings(lv_obj_t * column, Settings* settings) {
+
+    return true;
+}
