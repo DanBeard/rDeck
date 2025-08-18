@@ -2,6 +2,7 @@
 #include "../services/BaseService.h"
 #include "../apps/BaseApp.h"
 #include <lvgl.h>
+#include "apps/Settings.h"
 
 
 using namespace std;
@@ -34,8 +35,10 @@ const forward_list<AppInfo>& RetOS::appInfo() const {
 
 void _ui_loop(void* _) {
     RetOS* retos = retOsGlobalPtr;
+    // basic settile time
     delay(250);
     bool all_good;
+    // wait until all the services are ready for us
     do { 
         all_good = true;
         for(auto service : retos->_services) {
@@ -44,6 +47,13 @@ void _ui_loop(void* _) {
         delay(5);
     } while(!all_good);
 
+    // load global settings
+    // timesone
+    JsonObject settings = Settings::getSettings(Settings::global_settings_section);
+    const char* timezone = settings[Settings::timezone];
+    if(timezone != nullptr && strnlen(timezone,2) > 0) retos->time.setPosixTimezone(timezone);
+
+    // main loop
     uint32_t tickCount = 0;
     while(true) {
         // slow ticks roughly every ~1-5 seconds
@@ -105,6 +115,7 @@ void RetOS::start(){
 
     // let's boot up!
     _hal.register_service_task(_services_loop);
+    // this should return so call it last
     _hal.register_ui_task(_ui_loop);
 
 }

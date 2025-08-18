@@ -11,6 +11,8 @@ class Settings : public BaseApp {
         using BaseApp::BaseApp;
 
         static constexpr const char* settingsFile = "/settings.json";
+        static constexpr const char* global_settings_section = "settings";
+        static constexpr const char* timezone = "timezone";
 
         virtual void start(RetOS* retos);
         virtual void tick();
@@ -20,7 +22,8 @@ class Settings : public BaseApp {
         static void saveSettings();
 
         // drawing helpers
-        static void drawSettingsTextInputRow(lv_obj_t* col, const char* title, const char* value, FunctorCallback *callback);
+        lv_obj_t* drawSettingsTextInputRow(lv_obj_t* container, const char* title, const char* value, FunctorCallback *callback);
+        static void drawSettingsSectionHeader(lv_obj_t* container, const char* title);
 
     protected:
         lv_obj_t * settings_column;

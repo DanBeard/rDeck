@@ -2,6 +2,7 @@
 #include "lvgl.h"
 #include "RnsUtils/LoraInterface.h"
 #include "Bytes.h"
+#include "apps/Settings.h"
 
 // Yeah this means there can be only 1
 static RnsService* rnsService = nullptr; 
@@ -290,7 +291,43 @@ void RnsService::updateIcon(bool status){
     _retos->ui()->setServiceIcon(iconInfo);
 }
 
-bool RnsService::drawSettings(lv_obj_t * column, Settings* settings) {
+
+static FunctorCallback settingsCallback;
+
+bool RnsService::drawSettings(lv_obj_t * container, Settings* settings) {
+    settings->drawSettingsSectionHeader(container, "Reticulum");
+
+    JsonObject _settings = settings->getSettings(settingsSection);
+
+    lv_obj_t *fr, *bd, *sf, *cr;
+
+    // Create these BEFORE the functor so the pointers are valid when captured by functor
+    fr = settings->drawSettingsTextInputRow(container, "Frequency", "0", &settingsCallback);
+    bd = settings->drawSettingsTextInputRow(container, "Bandwidth", "0", &settingsCallback);
+    sf = settings->drawSettingsTextInputRow(container, "SF", "0", &settingsCallback);
+    cr = settings->drawSettingsTextInputRow(container, "CR", "0", &settingsCallback);
+
+    // must be static so it survives past this function call.
+    settingsCallback = [_settings, fr, bd, sf, cr](lv_event_t *e){
+        lv_obj_t * ta = lv_event_get_target(e);
+        // don't pass raw char* to JsonArduino or it won't copy them adn you'll get junk later
+        String value = lv_textarea_get_text(ta);
+        Serial.print("RNS change to =");
+        Serial.println(value);
+        if(ta == fr) {
+            Serial.print("fr");
+        } else if(ta == bd) {
+             Serial.print("bd");
+        } else if(ta == sf) {
+             Serial.print("sf");
+        } else if(ta == cr) {
+             Serial.print("cr");
+        } else {
+            Serial.print("Unknown!!");
+        }
+        //_settings[timezone] = new_timezone;
+        //_retos->time.setPosixTimezone(new_timezone.c_str());
+    }; 
 
     return true;
 }

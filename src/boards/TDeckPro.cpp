@@ -93,6 +93,17 @@ RetHal tDeckProHal = {
 // board init
 TouchDrvCSTXXX tDeckProTouch;
 
+void IRAM_ATTR handleButtonPress() {
+    Serial.println("Button pressed!");
+}
+void IRAM_ATTR handleButtonPress1() {
+    Serial.println("Button pressed ---- 1");
+}
+
+void IRAM_ATTR handleButtonPress2() {
+    Serial.println("Button pressed! ------ 2");
+}
+
 
 void tDeckBoardInit() {
 
@@ -172,32 +183,16 @@ void tDeckBoardInit() {
         Serial.println("[SD CARD] Card Mount Failed");
     }
 
+    /// THIS IS BOOT PIN
+    // pinMode(GPIO_NUM_0, INPUT_PULLUP);
+    //  attachInterrupt(digitalPinToInterrupt(GPIO_NUM_0), handleButtonPress, FALLING);
 
+    // THis is EN pin ... not sure we can use it :( 
+    //      pinMode(GPIO_NUM_1, INPUT_PULLUP);
+    //  attachInterrupt(digitalPinToInterrupt(GPIO_NUM_1), handleButtonPress1, FALLING);
 
+    // THis is buzzer. dont use it for Input lol!!!
+    //      pinMode(GPIO_NUM_2, INPUT_PULLUP);
+    //  attachInterrupt(digitalPinToInterrupt(GPIO_NUM_2), handleButtonPress2, FALLING);
 
-    // TODO
-    /*
-    peri_init_st[E_PERI_INK_SCREEN] = ink_screen_init();
-    peri_init_st[E_PERI_LORA]       = lora_init();
-    peri_init_st[E_PERI_TOUCH]      = touch.begin(Wire, BOARD_I2C_ADDR_TOUCH, BOARD_TOUCH_SDA, BOARD_TOUCH_SCL);
-    peri_init_st[E_PERI_KYEPAD]     = keypad_init(BOARD_I2C_ADDR_KEYBOARD);
-    peri_init_st[E_PERI_BQ25896]    = bq25896_init();
-    peri_init_st[E_PERI_BQ27220]    = bq27220_init();
-    peri_init_st[E_PERI_SD]         = sd_care_init();
-    peri_init_st[E_PERI_GPS]        = gps_init();
-    peri_init_st[E_PERI_BHI260AP]   = BHI260AP_init();
-    peri_init_st[E_PERI_LTR_553ALS] = LTR553_init();
-    peri_init_st[E_PERI_A7682E]     = A7682E_init();
-
-    if(peri_init_st[E_PERI_A7682E] == false)
-    {
-        peri_init_st[E_PERI_PCM5102A] = pcm5102a_init();
-    }
-
-    lvgl_init();
-
-    ui_deckpro_entry();
-
-    disp_full_refr();
-    */
 }

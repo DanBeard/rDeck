@@ -16,6 +16,7 @@ using namespace std;
 
 class BaseApp;
 class BaseService;
+class Settings;
 
 struct AppInfo {
     const char *name;
@@ -27,6 +28,7 @@ struct AppInfo {
 struct ServiceInfo {
     const uint8_t id;
     function<BaseService*()> factory ;
+    function<boolean(lv_obj_t * column, Settings* settings)> drawSettings;
 };
 
 static uint8_t id_counter = 1; 
@@ -46,7 +48,8 @@ template<class T> AppInfo AppFactory(const char *name, const void* icon) {
     const uint8_t id = id_counter++;
     ServiceInfo result = {
         .id = id,
-        .factory = [id](){return new T(id);}
+        .factory = [id](){return new T(id);},
+        .drawSettings = &(T::drawSettings),
     };
     return result;
 };

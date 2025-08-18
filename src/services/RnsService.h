@@ -35,6 +35,7 @@ public:
     RNS::Destination lxmf_delivery_src;
     RNS::Reticulum reticulum;
 
+    static constexpr const char* settingsSection = "reticulum";
     static bool drawSettings(lv_obj_t * column, Settings* settings);
     
 

@@ -338,14 +338,7 @@ void TimeHelper::setTime(time_t epoch_secs) {
     settimeofday(&tv, NULL);
 }
 
-void TimeHelper::setPosixTimezone(char* timezone_str) {\
+void TimeHelper::setPosixTimezone(const char* timezone_str) {\
   setenv("TZ",timezone_str,1);
   tzset();
-}
-
-void TimeHelper::saveTimeToSd() {
-
-}
-void TimeHelper::loadTimeFromSd() {
-  
 }
