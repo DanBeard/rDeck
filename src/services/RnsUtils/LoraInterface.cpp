@@ -22,20 +22,9 @@ LoRaInterface::LoRaInterface(BaseLora* lora, RnsService* service ) : _lora(lora)
 	stop();
 }
 
-bool LoRaInterface::start() {
+bool LoRaInterface::start(LoraConfig& config) {
 	_online = (false);
-    //Serial.print(("[SX1262] Initializing ... "));
-    // TODO load from JSON
-    LoraConfig config {
-        .frequency =  914.875F,
-        .bandwidth =  250.000F,
-        .sf = 7,
-        .cr = 8,
-        .power = 16,
-        .preamble_len = 8,
-        .crc = 0,
-        .explicitHeader = true
-    };
+ 
     bool error =  _lora->startLora(config);
     if(error) Serial.println("OH NO ERROR IN LORA CONFIG");
     else   {

@@ -1,6 +1,7 @@
 #include "Settings.h"
 #include "retOS/retosUtils/timezones.h"
 
+static JsonDocument _root_settings;
 
 /*virtual */ void Settings::start(RetOS* retos) {
 
@@ -19,11 +20,21 @@
 }
 
 /*virtual */ void Settings::stop() {
-     Settings::saveSettings();
-    
+     // apply our local settiing
+     JsonString timezone_val = _settings[timezone];
+     _retos->time.setPosixTimezone(timezone_val.c_str());
+
+     // apply the settings registered by services
+     for(auto sInfo: _retos->serviceInfo()) {
+        sInfo.applySettings();
+    }
+
+    // save and clear settings since JSON changes lead to garbage memleak
+    Settings::saveSettings();
+    _root_settings.clear();   
 }
  
-static JsonDocument _root_settings;
+
 
 JsonObject Settings::getSettings(const char* section) {
     // if we're null, then load it
@@ -129,6 +140,7 @@ lv_obj_t* Settings::drawSettingsTextInputRow( lv_obj_t* container, const char* t
     lv_obj_t *label = lv_label_create(container);
     lv_obj_set_size(label,  LV_PCT(38), LV_SIZE_CONTENT);
     lv_label_set_text(label, title);
+    lv_obj_set_style_pad_top(label, 5, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_add_flag(label, LV_OBJ_FLAG_FLEX_IN_NEW_TRACK);
 
     lv_obj_t *ta = lv_textarea_create(container);
@@ -153,16 +165,15 @@ void Settings::drawTimeDateSection() {
 
     drawSettingsSectionHeader(settings_column, "Date/Time");
     
-    JsonString timezone_val = _settings["timezone"];
+    JsonString timezone_val = _settings[timezone];
     // MUST be static so it exists past function call
-    static FunctorCallback callback = [this](lv_event_t *e){
+    static FunctorCallback callback;
+    // needs to be re-inited every call
+    callback = [this](lv_event_t *e){
         lv_obj_t * ta = lv_event_get_target(e);
         // don't pass raw char* to JsonArduino or it won't copy them adn you'll get junk later
         String new_timezone = lv_textarea_get_text(ta);
-        Serial.print("Timezone=");
-        Serial.println(new_timezone);
         _settings[timezone] = new_timezone;
-        _retos->time.setPosixTimezone(new_timezone.c_str());
     }; 
 
     Settings::drawSettingsTextInputRow(settings_column, "Timezone", timezone_val.c_str(), &callback);

@@ -17,8 +17,12 @@ class BaseLora
 {
 public:
 
+    const static size_t MAX_LORA_PACKET_SIZE = 256;
+    LoraConfig config;
+
     virtual void initLora() = 0;
-    virtual bool startLora(LoraConfig config) = 0;
+    virtual bool startLora(const LoraConfig &config) = 0;
+    virtual bool changeConfig(const LoraConfig &config) = 0;
     virtual bool hasPacket() = 0;
     // returns size put in buffer. 0 on error or no packet in buf
     virtual size_t read(uint8_t* data, uint32_t len) = 0;

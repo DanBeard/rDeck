@@ -48,5 +48,7 @@ public:
     // static trait methods . Refedine in subclass if you want to use it
     // return true if you drew settings
     static bool drawSettings(lv_obj_t * column, Settings* settings) { return false; }
+    // actually apply any settings changes
+    static void applySettings() { }
     
 };

@@ -37,6 +37,8 @@ public:
 
     static constexpr const char* settingsSection = "reticulum";
     static bool drawSettings(lv_obj_t * column, Settings* settings);
+    static void applySettings();
+    static void mergeLoraSettings(LoraConfig& config);
     
 
 protected:

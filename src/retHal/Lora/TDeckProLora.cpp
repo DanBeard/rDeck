@@ -1,13 +1,18 @@
 #include "TDeckProLora.h"
 #include <RadioLib.h>
 #include "freertos/ringbuf.h"
+#include "task.h"
 
 static Module radioModule(BOARD_LORA_CS, BOARD_LORA_INT, BOARD_LORA_RST, BOARD_LORA_BUSY);
 static volatile bool _transmitting = false; // true = we're transmitting, false we're listening
 static volatile bool _jobs_done = false;
+
+
 unsigned long _tstart = 0;
 unsigned long _tend = 0;
 
+static volatile bool loraTaskRunning = false; 
+static volatile bool pauseLoraTask = false; 
 static TaskHandle_t loraTaskHandle;
 static RingbufHandle_t send_buf;
 static RingbufHandle_t recv_buf;
@@ -31,7 +36,7 @@ void loraTask(void* in) {
 
     // init the radio
     Serial.println("Starting Lora retHAL");
-    LoraConfig& config = lora->config;
+    const LoraConfig& config = lora->config;
     delay(1000);
 
     int state = radio.begin(config.frequency, config.bandwidth, config.sf, config.cr, 0x12, config.power, config.preamble_len);
@@ -57,7 +62,7 @@ void loraTask(void* in) {
         while(1) {
             Serial.println("ERROR: Starting Lora retHAL");
             Serial.println(state);
-            delay(100);
+            delay(500);
         }
     }
     Serial.println("Finished Lora Rethal");
@@ -68,6 +73,10 @@ void loraTask(void* in) {
     delay(250); // give it a sec to start up
     
     while(true) {
+
+        while(pauseLoraTask) {
+            delay(500);
+        }
 
         if(_transmitting && !_jobs_done) {
             //Are we in the middle of transmitting?
@@ -152,10 +161,49 @@ TDeckProLora::TDeckProLora() : radio(&radioModule)  {
 void TDeckProLora::initLora() {
 
 }
-bool TDeckProLora::startLora(LoraConfig new_config) {
+bool TDeckProLora::changeConfig(const LoraConfig &new_config) {
+    
+    // poor mans mutex. Simple and fast for this use case
+    if(loraTaskRunning) {
+        pauseLoraTask = true;
+        delay(100);
+        if(this->config.frequency != new_config.frequency) radio.setFrequency(new_config.frequency);
+        if(this->config.bandwidth != new_config.bandwidth) radio.setBandwidth(new_config.bandwidth);
+        if(this->config.sf != new_config.sf) radio.setSpreadingFactor(new_config.sf);
+        if(this->config.cr != new_config.cr) radio.setCodingRate(new_config.cr);
+        if(this->config.power != new_config.power) radio.setOutputPower(new_config.power);
+        if(this->config.preamble_len != new_config.preamble_len) radio.setPreambleLength(new_config.preamble_len);
+
+        Serial.println("Changed Lora Config");
+        this->config = new_config;
+        pauseLoraTask = false;
+        } else {
+            startLora(new_config);
+        }
+    
+    return false;
+}
+
+bool TDeckProLora::startLora(const LoraConfig &new_config) {
+    
+    // delete any currently running tasks
+    if(loraTaskRunning) {
+        vTaskDelete(loraTaskHandle);
+        loraTaskRunning = false;
+        delay(100);
+        // reset radio
+        radio.reset();
+        delay(100);
+    }
+    
     this->config = new_config;
-    xTaskCreatePinnedToCore(loraTask, "LoraTask", 10000, this, 15, &loraTaskHandle, 0);
-    return false; //it's allll good if we got here
+    BaseType_t xReturned = xTaskCreatePinnedToCore(loraTask, "LoraTask", 10000, this, 15, &loraTaskHandle, 0);
+    if( xReturned == pdPASS ) {
+        loraTaskRunning = true;
+        return false; //it's allll good if we got here
+    } 
+
+    return true;
 }
 
 bool TDeckProLora::hasPacket() {

@@ -9,7 +9,7 @@
 #include "boards/board.h"
 
 forward_list<AppInfo> apps= {
-     AppFactory<HelloWorld>("HW", &img_setting), 
+     AppFactory<ClockApp>("Clock", &img_clock), 
      AppFactory<NotesApp>("Notes", &img_test),  
    AppFactory<Settings>("Settings", &img_setting)
 };

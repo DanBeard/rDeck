@@ -128,6 +128,8 @@ static void onLink(RNS::Link& link) {
 void RnsService::start(RetOS* retos){
     updateIcon(false);
 
+    // pause and then load config
+
     RetHal hal = retos->hal();
     _lora = hal.lora;
     _fs = hal.fs;
@@ -140,7 +142,23 @@ void RnsService::start(RetOS* retos){
 
     lora_interface.mode(RNS::Type::Interface::MODE_GATEWAY);
 	RNS::Transport::register_interface(lora_interface);
-    lora_interface_impl->start();
+
+
+    // TODO merge with settings config
+    LoraConfig config {
+        .frequency =  914.875F,
+        .bandwidth =  250.000F,
+        .sf = 7,
+        .cr = 8,
+        .power = 16,
+        .preamble_len = 8,
+        .crc = 0,
+        .explicitHeader = true
+    };
+    // merge any changes the user has mad
+    mergeLoraSettings(config);
+
+    lora_interface_impl->start(config);
 
     reticulum = RNS::Reticulum();
 
@@ -293,41 +311,95 @@ void RnsService::updateIcon(bool status){
 
 
 static FunctorCallback settingsCallback;
+static LoraConfig userConfig;
 
 bool RnsService::drawSettings(lv_obj_t * container, Settings* settings) {
-    settings->drawSettingsSectionHeader(container, "Reticulum");
+    settings->drawSettingsSectionHeader(container, "Reticulum (LoRa)");
 
     JsonObject _settings = settings->getSettings(settingsSection);
+    if(!_settings.containsKey("lora") || _settings["lora"].isNull()) {
+            _settings.createNestedObject("lora");
+    }
+
+    BaseLora *radio = retOsGlobalPtr->hal().lora;
 
     lv_obj_t *fr, *bd, *sf, *cr;
 
     // Create these BEFORE the functor so the pointers are valid when captured by functor
-    fr = settings->drawSettingsTextInputRow(container, "Frequency", "0", &settingsCallback);
-    bd = settings->drawSettingsTextInputRow(container, "Bandwidth", "0", &settingsCallback);
-    sf = settings->drawSettingsTextInputRow(container, "SF", "0", &settingsCallback);
-    cr = settings->drawSettingsTextInputRow(container, "CR", "0", &settingsCallback);
+    LoraConfig &config = radio->config;
+    userConfig = config;
+
+    constexpr size_t buf_size = 24;
+    char tmp[buf_size + 1];
+    snprintf(tmp, buf_size, "%.3f", config.frequency);
+    fr = settings->drawSettingsTextInputRow(container, "Frequency", tmp, &settingsCallback);
+    snprintf(tmp, buf_size, "%.3f", config.bandwidth);
+    bd = settings->drawSettingsTextInputRow(container, "Bandwidth", tmp, &settingsCallback);
+    itoa(config.sf, tmp, 10);
+    sf = settings->drawSettingsTextInputRow(container, "SF", tmp, &settingsCallback);
+    itoa(config.cr, tmp, 10);
+    cr = settings->drawSettingsTextInputRow(container, "CR", tmp, &settingsCallback);
 
     // must be static so it survives past this function call.
     settingsCallback = [_settings, fr, bd, sf, cr](lv_event_t *e){
         lv_obj_t * ta = lv_event_get_target(e);
-        // don't pass raw char* to JsonArduino or it won't copy them adn you'll get junk later
+        // don't pass raw char* to JsonArduino or it won't copy them and you'll get junk later
         String value = lv_textarea_get_text(ta);
-        Serial.print("RNS change to =");
-        Serial.println(value);
         if(ta == fr) {
-            Serial.print("fr");
+            userConfig.frequency = value.toFloat();
         } else if(ta == bd) {
-             Serial.print("bd");
+             userConfig.bandwidth = value.toFloat();
         } else if(ta == sf) {
-             Serial.print("sf");
+             userConfig.sf = value.toInt();
         } else if(ta == cr) {
-             Serial.print("cr");
+             userConfig.cr = value.toInt();
         } else {
             Serial.print("Unknown!!");
         }
-        //_settings[timezone] = new_timezone;
-        //_retos->time.setPosixTimezone(new_timezone.c_str());
     }; 
 
     return true;
+}
+
+void RnsService::applySettings() {
+    BaseLora *radio = retOsGlobalPtr->hal().lora;
+    LoraConfig old_config = radio->config;
+
+    // did anything actually change?
+    Serial.println("Did Lora Change?");
+    if(old_config.frequency != userConfig.frequency || old_config.bandwidth != userConfig.bandwidth || old_config.sf != userConfig.sf  || old_config.cr != userConfig.cr) {
+        // then change it!
+        Serial.println("Lora change detected.... serializing to JSON");
+        JsonObject _settings = Settings::getSettings(settingsSection);
+        JsonObject loraSettings = _settings["lora"];
+        loraSettings["fr"] = userConfig.frequency;
+        loraSettings["bw"] = userConfig.bandwidth;
+        loraSettings["sf"] = userConfig.sf;
+        loraSettings["cr"] = userConfig.cr;
+
+        Serial.println("Lora change detected.... changing radio config");
+        if(retOsGlobalPtr->hal().lora != nullptr) {
+            retOsGlobalPtr->hal().lora->changeConfig(userConfig);
+        }
+
+    }
+
+}
+
+void RnsService::mergeLoraSettings(LoraConfig& config) {
+    JsonObject _settings = Settings::getSettings(settingsSection);
+    JsonObject loraSettings = _settings["lora"];
+    // copy over any settings changes
+    if(loraSettings.containsKey("fr")) {
+        config.frequency = loraSettings["fr"];
+    }
+    if(loraSettings.containsKey("bw")) {
+        config.bandwidth = loraSettings["bw"];
+    }
+    if(loraSettings.containsKey("sf")) {
+        config.sf = loraSettings["sf"];
+    }
+    if(loraSettings.containsKey("cr")) {
+        config.cr = loraSettings["cr"];
+    }
 }

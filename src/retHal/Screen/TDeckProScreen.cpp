@@ -88,7 +88,7 @@ static void flush_timer_cb(lv_timer_t *t)
             display.drawInvertedBitmap(0, 0, decodebuffer, w, h - 3, GxEPD_BLACK);
         }
         while (display.nextPage());
-        Serial.printf("flush_timer_cb\n");
+        //Serial.printf("flush_timer_cb\n");
         display.hibernate();
         display.powerOff();
         lv_timer_pause(flush_timer);

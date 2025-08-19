@@ -27,7 +27,7 @@ namespace RNS { namespace Interfaces {
 		LoRaInterface(const char* name = "LoRaInterface");
 		virtual ~LoRaInterface();
 
-		bool start();
+		bool start(LoraConfig &config);
 		void stop();
 		void tick(RNS::Interface& interface);
 

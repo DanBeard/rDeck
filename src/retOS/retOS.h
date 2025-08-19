@@ -29,6 +29,7 @@ struct ServiceInfo {
     const uint8_t id;
     function<BaseService*()> factory ;
     function<boolean(lv_obj_t * column, Settings* settings)> drawSettings;
+    function<void()> applySettings;
 };
 
 static uint8_t id_counter = 1; 
@@ -49,7 +50,9 @@ template<class T> AppInfo AppFactory(const char *name, const void* icon) {
     ServiceInfo result = {
         .id = id,
         .factory = [id](){return new T(id);},
+        // proxy out the static settings saccessors
         .drawSettings = &(T::drawSettings),
+        .applySettings= &(T::applySettings)
     };
     return result;
 };

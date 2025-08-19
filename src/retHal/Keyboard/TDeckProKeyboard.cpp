@@ -119,6 +119,8 @@ static void lvgl_keyboard_read(lv_indev_drv_t * indev, lv_indev_data_t * data){
             // not sure what to do with these yet O.o
             if(c==MIC_BUTTON) {}
             if(c==SPEAKER_BUTTON) {}
+
+            data->continue_reading = v>1;
         }
     }
 

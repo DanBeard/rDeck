@@ -18,6 +18,8 @@ class Settings : public BaseApp {
         virtual void tick();
         virtual void stop();
 
+        // warning DO NOT KEEP THESE JSON OBJECTS AROUND. Deserialize and move on
+        // THey will become invalid if the doc gets clear or cleaned up after serialization
         static JsonObject getSettings(const char* section);
         static void saveSettings();
 
