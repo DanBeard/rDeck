@@ -1,6 +1,7 @@
 #include "TimeHelper.h"
 #include <Arduino.h>
 #include <SD.h>
+#include "sys/time.h"
 
 // Below is code to automatically detect timezones from GPS locations and openmap data
 // It kept saying chicago was in detroit, so we can't use it :( 
@@ -333,8 +334,9 @@
 
 
 void TimeHelper::setTime(time_t epoch_secs) {
-    struct timeval tv;
+    struct timeval tv = {0};
     tv.tv_sec = epoch_secs;
+    tv.tv_usec = 0;
     settimeofday(&tv, NULL);
 }
 

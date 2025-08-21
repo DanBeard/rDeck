@@ -13,9 +13,10 @@ class Settings : public BaseApp {
         static constexpr const char* settingsFile = "/settings.json";
         static constexpr const char* global_settings_section = "settings";
         static constexpr const char* timezone = "timezone";
+        static constexpr const char* epoch = "epoch";
 
         virtual void start(RetOS* retos);
-        virtual void tick();
+        virtual void tick(const time_t tickMillis);
         virtual void stop();
 
         // warning DO NOT KEEP THESE JSON OBJECTS AROUND. Deserialize and move on

@@ -6,9 +6,9 @@ class HelloWorld : public BaseApp {
     // inherit default ctor
     using BaseApp::BaseApp;
 
-    virtual void start(RetOS* retos);
-    virtual void tick();
-    virtual void stop();
+    virtual void start(RetOS* retos) override;
+    virtual void tick(const time_t tickMillis) override;
+    virtual void stop() override;
 
 
 };

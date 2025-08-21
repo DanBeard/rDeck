@@ -49,7 +49,7 @@
     file.close();
 }
 
-/*virtual */ void NotesApp::tick() {
+/*virtual */ void NotesApp::tick(const time_t tickMillis) {
     
 }
 

@@ -25,6 +25,8 @@ LV_IMG_DECLARE(img_PCM5102)
 LV_IMG_DECLARE(img_touch)
 LV_IMG_DECLARE(img_start)
 LV_IMG_DECLARE(img_clock)
+LV_IMG_DECLARE(img_gear)
+LV_IMG_DECLARE(img_notes)
 
 
 

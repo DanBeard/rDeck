@@ -24,7 +24,7 @@ class RnsService: public BaseService {
 public:
     explicit RnsService(uint8_t id);
     virtual void start(RetOS* retos) override; // called after construction once the OS is ready to launch services
-    virtual void tick() override; // called periodically by OS so you can do work. Time varies by sleep and power level but ~1-3ms while awake
+    virtual void tick(const time_t tmillis) override; // called periodically by OS so you can do work. Time varies by sleep and power level but ~1-3ms while awake
     void announce();
 
     bool isValid = false;
@@ -40,6 +40,8 @@ public:
     static void applySettings();
     static void mergeLoraSettings(LoraConfig& config);
     
+
+    //functions to get info
 
 protected:
     void updateIcon(bool status);

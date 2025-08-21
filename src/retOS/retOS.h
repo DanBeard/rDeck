@@ -8,6 +8,7 @@
 #include "Events.h"
 #include <ArduinoJson.h>
 #include "./retosUtils/TimeHelper.h"
+#include "./RetRunnable.h"
 
 #define RETOS_LIGHT_SLEEP_AFTER_MS (1000*1000)
 #define SKIP_SLEEP
@@ -34,9 +35,10 @@ struct ServiceInfo {
 
 static uint8_t id_counter = 1; 
 
+// static so id should always be the same for the same template
 template<class T> AppInfo AppFactory(const char *name, const void* icon) {
-    const uint8_t id = id_counter++;
-    AppInfo result = {
+    static const uint8_t id = id_counter++;
+    static AppInfo result = {
         .name = name,
         .id = id,
         .icon = icon,
@@ -45,9 +47,10 @@ template<class T> AppInfo AppFactory(const char *name, const void* icon) {
     return result;
 };
 
+// static so id should always be the same for the same template
  template<class T> ServiceInfo ServiceFactory() {
-    const uint8_t id = id_counter++;
-    ServiceInfo result = {
+    static uint8_t id = id_counter++;
+    static ServiceInfo result = {
         .id = id,
         .factory = [id](){return new T(id);},
         // proxy out the static settings saccessors
@@ -82,6 +85,8 @@ public:
     // THis function takes control of the functor and will delete the ptr after it's run
     void run_later(std::function<void()> func, uint32_t ms);
 
+    
+
     TimeHelper time;
 
 protected:
@@ -91,7 +96,7 @@ protected:
 
     RetHal _hal;
     RetUI _ui;
-    forward_list<BaseService*> _services;
+    forward_list<RetRunnable*> _services;
 
     forward_list<ServiceInfo> _serviceInfos;
     forward_list<AppInfo> _appInfos;
@@ -103,6 +108,21 @@ protected:
 
     void initHardware();
     void maybeLightSleep();
+
+    
+public:
+
+    template<class T> T* fetchService() { 
+        ServiceInfo info = ServiceFactory<T>();
+        const uint8_t sId = info.id;
+
+        for(RetRunnable* service : _services) {
+            if(service->id() == sId) return (T*) service;
+        }
+        // no sch service O.o
+        return nullptr;
+
+     };
 
 };
 

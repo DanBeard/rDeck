@@ -27,7 +27,7 @@
 
 }
 
-/*virtual */ void ClockApp::tick() {
+/*virtual */ void ClockApp::tick(const time_t tickMillis) {
     updateTime();
 }
 
@@ -42,12 +42,14 @@ void ClockApp::updateTime() {
     localtime_r(&now, &timeinfo);
 
     if(now - _last_time_grabbed > update_every_sec) {
+
+        _last_time_grabbed = now;
+        _last_time_info = timeinfo;
+
         char time_txt[20];
         char date_txt[20];
-        strftime(time_txt, 20, "%H:%M:%S", &timeinfo);
+        strftime(time_txt, 20, "%H:%M", &timeinfo);
         strftime(date_txt, 20, "%Y-%m-%d", &timeinfo);
-        sprintf(time_txt, "%.2d:%.2d", _last_time_info.tm_hour, _last_time_info.tm_min);
-        sprintf(date_txt, "%d-%.2d-%.2d", _last_time_info.tm_year, _last_time_info.tm_mon, _last_time_info.tm_mday);
 
         lv_label_set_text(_time_lbl, time_txt);
         lv_label_set_text(_date_lbl, date_txt);

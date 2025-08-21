@@ -288,13 +288,12 @@ void RnsService::announce() {
 }
 
 static unsigned long last_announce = 0;
-void RnsService::tick() {
+void RnsService::tick(const time_t tMillis) {
     // TODO TEMP FOR TESTING REMOVE ME OR MAKE MUCH LONGER OR VIA CONFIG
-    unsigned long now = millis();
-    if(now - last_announce > (10*60*1000)){
+    if(tMillis - last_announce > (10*60*1000)){
         Serial.println("RNS ANNOUNCE");
         announce();
-        last_announce = now;
+        last_announce = tMillis;
         reticulum.should_persist_data();
     }
      lora_interface_impl->tick(lora_interface);

@@ -41,48 +41,63 @@ void _ui_loop(void* _) {
     // wait until all the services are ready for us
     do { 
         all_good = true;
-        for(auto service : retos->_services) {
+        for(auto runnable : retos->_services) {
+            BaseService* service = (BaseService*) runnable;
             all_good = all_good && service->status() != STARTING;
         }
-        delay(5);
+        delay(100);
     } while(!all_good);
 
     // load global settings
-    // timesone
+    // timezone
     JsonObject settings = Settings::getSettings(Settings::global_settings_section);
     const char* timezone = settings[Settings::timezone];
-    if(timezone != nullptr && strnlen(timezone,2) > 0) retos->time.setPosixTimezone(timezone);
+    if(timezone != nullptr && strnlen(timezone,2) > 0)  {
+        retos->time.setPosixTimezone(timezone);
+        Serial.print("Setting Timezone = ");
+        Serial.println(timezone);
+    } else {
+        Serial.print("Can't set timezone to ");
+        Serial.println(timezone);
+    }
 
     // main loop
-    uint32_t tickCount = 0;
     while(true) {
-        // slow ticks roughly every ~1-5 seconds
-        if(tickCount % 10 == 0){
+        time_t tickTime = millis();
+
+        // tick active app
+        if(retos->_active_app != nullptr) {
+            retos->_active_app->tick(tickTime);
+        }
+
+        static time_t lastSlowTickTime = 0;
+        // slow ticks roughly every ~1-5 seconds  (|| for over-flow when mills() goes back to 0)
+        if(tickTime - lastSlowTickTime > 1000 || lastSlowTickTime > tickTime){
+            lastSlowTickTime = tickTime;
+            // draw general UI elements like battery level and sensor status
             retos->_ui.slow_loop();
-            // maybe light sleep()
+
+            // is it time to sleep?
             retos->maybeLightSleep();
         } 
 
-        // loop apps
-        if(retos->_active_app != nullptr) {
-            retos->_active_app->tick();
-        }
         // loop UI/ timers
         uint32_t time_till_next = lv_timer_handler();
         lv_task_handler();
         //if(time_till_next == LV_NO_TIMER_READY) time_till_next = 5; /*handle LV_NO_TIMER_READY. Another option is to `sleep` for longer*/
         delay(min(time_till_next, (uint32_t) 5));    
-        tickCount++;
     }
 }
 
 void _services_loop(void* _) {
      RetOS* retos = retOsGlobalPtr;
 
+     //basic settle time
      delay(10);
      while(true) {
+        const time_t tmillis = millis();
         for(auto service : retos->_services) {
-            service->tick();
+            service->tick(tmillis);
       }
       delay(1);   
      }
@@ -183,7 +198,8 @@ void  RetOS::run_later(std::function<void()> func, uint32_t ms) {
 void RetOS::publishEvent(const Event& e) {
     // events should only come from services, so just run the service handlers in this current context.
     bool handled = false;
-    for(auto service : _services) {
+    for(auto runnable : _services) {
+        BaseService* service = (BaseService*) runnable;
         EventStatus status = service->onEvent(e);
         if(status == HANDLED)  {
             handled = true;
@@ -255,7 +271,8 @@ void RetOS::maybeLightSleep() {
     }
 
     // services
-    for(auto service : _services) {
+    for(auto runnable : _services) {
+            BaseService* service = (BaseService*) runnable;
             uint64_t last_service_action = service->timeOfLastAction();
             if(last_service_action <= now && last_service_action > last_action) {
                 last_action = last_service_action;

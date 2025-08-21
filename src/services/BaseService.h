@@ -1,5 +1,5 @@
 #pragma once
-
+#include "../retOS/RetRunnable.h"
 #include "../retOS/Events.h"
 #include "../retOS/retOS.h"
 
@@ -20,10 +20,9 @@ enum ServiceStatus {
 // As such, MUCH more attention needs to be paid to timing, code size and memory allocation
 // avoid dynamic memory when possible, and always clean up after yourself.
 // Keep polling to a minimum. Try being event drvien using the events
-class BaseService {
+class BaseService : public RetRunnable {
 
 protected:
-    const uint8_t _id; // ID MUST be unique among all installed services. This makes it easier to quickly identify apps
     RetOS* _retos; // pointer to the os object
     ServiceStatus _status = STARTING;
 
@@ -34,11 +33,9 @@ protected:
 public:
     BaseService(const uint8_t id);
     virtual void start(RetOS* retos)=0; // called after construction once the OS is ready to launch services
-    virtual void tick() = 0; // called periodically by OS so you can do work. TIme varies by sleep and power level.
-
+ 
     virtual EventStatus onEvent(const Event& event);
 
-    const uint8_t id() const;
     const ServiceStatus status() const;
     void startService(RetOS* retos);
 
@@ -50,5 +47,6 @@ public:
     static bool drawSettings(lv_obj_t * column, Settings* settings) { return false; }
     // actually apply any settings changes
     static void applySettings() { }
+
     
 };

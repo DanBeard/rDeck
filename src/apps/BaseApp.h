@@ -1,4 +1,5 @@
 #pragma once
+#include "../retOS/RetRunnable.h"
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include "../retOS/retOS.h"
@@ -15,16 +16,15 @@ using namespace std;
 * The retOS will destroy the app when it is exited by the user
 * Avoid dynamic memory if possible and clean up after yourself!
 */
-class BaseApp {
+class BaseApp : public RetRunnable {
 public:
     explicit BaseApp(const char *name, const uint8_t _id);
 
 protected:
     
-    
     char _name[RETOS_MAX_APP_NAME_SIZE + 1];
     // As a convention to avoid conflict with services, Apps start at 0x00 and are less than 0x80 aka < 128 aka low bit
-    const uint8_t _id; // ID MUST be unique among all installed apps. This makes it easier to quickly identify apps
+
     RetOS* _retos; // pointer to the os object
     lv_obj_t* screen; // the LVGL screen for this app to draw on. If you stay inside these bounds you don't mess up OS widgets
     virtual void start(RetOS* retos) = 0; // called after construction once the UI is ready to be drawn on
@@ -36,12 +36,10 @@ protected:
 public:
     void startApp(RetOS* retos);
     
-    virtual void tick() = 0; // called periodically by OS so you can do work. TIme varies by sleep and power level.
     virtual void stop() = 0; // called when the app is closed, before destruction
     uint64_t timeOfLastAction() { return _lastActionTime;}// returns the time of the last action in millis(). Used for sleep calculations
     bool keepAwake() const {return _keep_awake;}
     virtual EventStatus onEvent(const Event& event);
 
-    const uint8_t id() const;
 
 };

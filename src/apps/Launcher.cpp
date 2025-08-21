@@ -20,7 +20,7 @@
 
 }
 
-/*virtual */ void Launcher::tick() {
+/*virtual */ void Launcher::tick(const time_t tickMillis) {
     
 }
 

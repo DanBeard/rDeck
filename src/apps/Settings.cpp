@@ -15,14 +15,19 @@ static JsonDocument _root_settings;
 
 }
 
-/*virtual */ void Settings::tick() {
+/*virtual */ void Settings::tick(const time_t tickMillis) {
     
 }
 
 /*virtual */ void Settings::stop() {
      // apply our local settiing
      JsonString timezone_val = _settings[timezone];
+     time_t epoch_val = _settings[epoch];
      _retos->time.setPosixTimezone(timezone_val.c_str());
+     if(epoch_val > 0) {
+         _retos->time.setTime(epoch_val);
+     }
+    
 
      // apply the settings registered by services
      for(auto sInfo: _retos->serviceInfo()) {
@@ -166,17 +171,35 @@ void Settings::drawTimeDateSection() {
     drawSettingsSectionHeader(settings_column, "Date/Time");
     
     JsonString timezone_val = _settings[timezone];
+
+    time_t now;
+    time(&now);
+
+    String epoch_val(now);
+
     // MUST be static so it exists past function call
-    static FunctorCallback callback;
+    static FunctorCallback timezone_callback;
     // needs to be re-inited every call
-    callback = [this](lv_event_t *e){
+    timezone_callback = [this](lv_event_t *e){
         lv_obj_t * ta = lv_event_get_target(e);
         // don't pass raw char* to JsonArduino or it won't copy them adn you'll get junk later
         String new_timezone = lv_textarea_get_text(ta);
+        new_timezone.toUpperCase(); // timezones are always all upper case
         _settings[timezone] = new_timezone;
     }; 
 
-    Settings::drawSettingsTextInputRow(settings_column, "Timezone", timezone_val.c_str(), &callback);
+
+    static FunctorCallback epoch_callback;
+    // needs to be re-inited every call
+    epoch_callback = [this](lv_event_t *e){
+        lv_obj_t * ta = lv_event_get_target(e);
+        // don't pass raw char* to JsonArduino or it won't copy them adn you'll get junk later
+        String new_epoch = lv_textarea_get_text(ta);
+        _settings[epoch] = new_epoch.toInt();
+    }; 
+
+    Settings::drawSettingsTextInputRow(settings_column, "Timezone", timezone_val.c_str(), &timezone_callback);
+    Settings::drawSettingsTextInputRow(settings_column, "Epoch", epoch_val.c_str(), &epoch_callback);
 
     // TODO: Timezone lookup modal by city search or using GPS logic
     // lv_obj_t * btn1 = lv_btn_create(settings_column);
