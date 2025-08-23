@@ -10,8 +10,6 @@ static boolean loaded = false;
 #define LXMF_CONVERSATION_FOLDER "/lxmf/conversations/"
 
 
-
-
 AnnounceData::AnnounceData(JsonArray &array) {
     MsgPackBinary destb = array[0].as<MsgPackBinary>();
     dest.assign((uint8_t*)destb.data(), destb.size());
@@ -98,7 +96,8 @@ static Conversation current_conv;
 // TODO: Should we use a queue or something? in theory someone could have 2 full conversations open here
 // TODO: in addition to all the buffer overhead for serialization and file writing/reading O.o
 static Conversation temp_conv;
-
+// Set of ALL conversation metainfo so we can easily show a list or whatever
+static set<ConversationMetaInfo> conversations_set;
 
 static void load_converstion(const RNS::Bytes &src_hash, Conversation &conv) {
     string hexId = src_hash.toHex();
@@ -117,14 +116,14 @@ static void load_converstion(const RNS::Bytes &src_hash, Conversation &conv) {
         conv.deserialize(doc);
         doc.clear();
     } else {
-        conv.their_hash = src_hash;
+        conv.info.their_hash = src_hash;
     }
 
 }
 
 void persistConversation(Conversation &conv) {
-    if(conv.their_hash.size() > 0) {
-        string hexId = conv.their_hash.toHex();
+    if(conv.info.their_hash.size() > 0) {
+        string hexId = conv.info.their_hash.toHex();
         FS* fs = retOsGlobalPtr->hal().fs;
 
         string path = LXMF_CONVERSATION_FOLDER + hexId + ".bin";
@@ -139,7 +138,10 @@ void persistConversation(Conversation &conv) {
 }
 
 Conversation* Retcon::LXMF::loadAsCurrentConversation(const RNS::Bytes &src_hash) {
+    getAllConversationInfo();
     load_converstion(src_hash, current_conv);
+    // make sure current conv is in the list
+    conversations_set.insert(current_conv.info);
     return &current_conv;
 }
 
@@ -147,16 +149,18 @@ void Retcon::LXMF::persistCurrentConversation() {
     persistConversation(current_conv);
 }
 
-
 void Retcon::LXMF::addMessageToConversation(const Message &msg) {
 
-    if(msg.src == current_conv.their_hash) {
+    if(msg.src == current_conv.info.their_hash) {
         current_conv.addMessage(msg);
     } else {
         // ouch -- gotta load the whole thing to persist a single new message
         load_converstion(msg.src, temp_conv);
         temp_conv.addMessage(msg);
         persistConversation(temp_conv);
+        // make sure it's in the meta list
+        conversations_set.insert(temp_conv.info);
+        temp_conv.clear();
     }   
 }
 
@@ -171,16 +175,34 @@ const std::list<Message>& Conversation::getMessages() const {
     return msgs;
 }
 
-
 void Conversation::clear() {
-    their_hash.clear();
-    their_name.clear();
+    info.clear();
     msgs.clear();
 }
 
+void ConversationMetaInfo::clear() {
+    their_hash.clear();
+    their_name.clear();
+    last_message_at = 0;
+}
+
+void ConversationMetaInfo::serialize(JsonObject &obj) {
+    obj["their_hash"] = MsgPackBinary(their_hash.data(), their_hash.size());
+    obj["their_name"] = their_name;
+
+}
+
+void ConversationMetaInfo::deserialize(JsonObject &obj) {
+    MsgPackBinary thb = obj["their_hash"].as<MsgPackBinary>();
+    their_hash.assign((uint8_t*)thb.data(), thb.size());
+
+    their_name = obj["their_name"].as<string>();
+
+}
+
 void Conversation::serialize(JsonDocument &doc) {
-    doc["their_hash"] = MsgPackBinary(their_hash.data(), their_hash.size());
-    doc["their_name"] = their_name;
+    JsonObject infoObj = doc["info"].createNestedObject();
+    info.serialize(infoObj);
     JsonArray msgArray = doc["messages"].createNestedArray();
 
     for(Message msg : this->msgs) {
@@ -191,10 +213,8 @@ void Conversation::serialize(JsonDocument &doc) {
 }
 
 void Conversation::deserialize(JsonDocument &doc) {
-    MsgPackBinary thb = doc["their_hash"].as<MsgPackBinary>();
-    their_hash.assign((uint8_t*)thb.data(), thb.size());
-
-    their_name = doc["their_name"].as<string>();
+    JsonObject infoObj = doc["info"];
+    info.deserialize(infoObj);
 
     JsonArray msgArray = doc["messages"];
     for(int i = 0; i < msgArray.size() && i < max_messages; i++) {
@@ -202,5 +222,53 @@ void Conversation::deserialize(JsonDocument &doc) {
         MsgPackBinary mbin = msgArray[i].as<MsgPackBinary>();
         bytes.assign((uint8_t *) mbin.data(), mbin.size());
         msgs.push_back(Message(bytes));
+    }
+}
+
+
+
+set<ConversationMetaInfo>* getAllConversationInfo() {
+    if(conversations_set.size() > 0) return &conversations_set;
+
+    FS* fs = retOsGlobalPtr->hal().fs;
+    string path = LXMF_CONVERSATION_FOLDER  "message_set.bin";
+
+    if(fs->exists(path.data())) {
+        JsonDocument doc;
+        
+        File f = fs->open(path.data(), "r");
+        deserializeMsgPack(doc, f);
+        f.close();
+
+        for(int i=0; i<doc.size();i++){
+            JsonObject obj = doc[i];
+            ConversationMetaInfo info;
+            info.deserialize(obj);
+            conversations_set.insert(info);
+        }
+
+        doc.clear();
+    }
+
+    return &conversations_set;
+}
+
+void persistAllConversationInfo(){
+    if(conversations_set.size() > 0) {
+        FS* fs = retOsGlobalPtr->hal().fs;
+        string path = LXMF_CONVERSATION_FOLDER  "message_set.bin";
+
+        JsonDocument doc;
+        int i = 0;
+        for(ConversationMetaInfo info: conversations_set) {
+            if(i < ConversationMetaInfo::max_converstaions) {
+                JsonObject obj = doc[i++].createNestedObject();
+                info.serialize(obj);
+            }
+        }
+        File f = fs->open(path.data(), "w", true);
+        serializeMsgPack(doc, f);
+        f.close();
+        doc.clear();
     }
 }

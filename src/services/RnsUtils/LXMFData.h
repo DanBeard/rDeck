@@ -35,8 +35,6 @@ namespace Retcon::LXMF {
              boolean operator==(const AnnounceData& other) const {
                 return last_heard == other.last_heard && dest == other.dest && app_data == other.app_data;
             }
-
-
     };
 
     class Message {
@@ -51,13 +49,34 @@ namespace Retcon::LXMF {
             void serialize(JsonArray array);
     };
 
+    class ConversationMetaInfo {
+        public:
+            const static uint32_t max_converstaions=100;
+            RNS::Bytes their_hash;
+            string their_name;
+            time_t last_message_at;
+
+            void clear();
+            void serialize(JsonObject &obj);
+            void deserialize(JsonObject &obj);
+
+            boolean operator<(const ConversationMetaInfo& other) const {
+                return this->last_message_at < other.last_message_at;
+            }
+            boolean operator>(const ConversationMetaInfo& other) const {
+                return this->last_message_at > other.last_message_at;
+            }
+            boolean operator==(const ConversationMetaInfo& other) const {
+                return last_message_at == other.last_message_at && their_hash == other.their_hash;
+            }
+    };
+
     class Conversation {
         protected:
             std::list<Message> msgs; // use the accessors please :)
         public:
             static const uint32_t max_messages = 200;
-            RNS::Bytes their_hash;
-            string their_name;
+            ConversationMetaInfo info;
         
             void addMessage(const Message &msg);
             const std::list<Message>& getMessages() const;
@@ -68,8 +87,12 @@ namespace Retcon::LXMF {
 
     };
 
+    
     set<AnnounceData>* getAnnounceData();
     void persistAnnounceData();
+
+    set<ConversationMetaInfo>* getAllConversationInfo();
+    void persistAllConversationInfo();
 
     // only one conversation at a time
     Conversation* loadAsCurrentConversation(const RNS::Bytes &src_hash);
