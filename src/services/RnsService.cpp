@@ -3,6 +3,9 @@
 #include "RnsUtils/LoraInterface.h"
 #include "Bytes.h"
 #include "apps/Settings.h"
+#include "RnsUtils/LXMFData.h"
+
+//using namespace Retcon::LXMF;
 
 // Yeah this means there can be only 1
 static RnsService* rnsService = nullptr; 
@@ -115,8 +118,8 @@ static void onLinkPacket(const RNS::Bytes& plaintext, const RNS::Packet& packet)
     }, 2500);
    
     //rnsService->lxmf_delivery_src.s
-
-
+    Retcon::LXMF::Message lxmf_msg(plaintext);
+    Retcon::LXMF::addMessageToConversation(lxmf_msg);
 
 }
 static void onLink(RNS::Link& link) {
