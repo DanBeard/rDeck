@@ -227,7 +227,7 @@ void Conversation::deserialize(JsonDocument &doc) {
 
 
 
-set<ConversationMetaInfo>* getAllConversationInfo() {
+set<ConversationMetaInfo>* Retcon::LXMF::getAllConversationInfo() {
     if(conversations_set.size() > 0) return &conversations_set;
 
     FS* fs = retOsGlobalPtr->hal().fs;
@@ -253,7 +253,7 @@ set<ConversationMetaInfo>* getAllConversationInfo() {
     return &conversations_set;
 }
 
-void persistAllConversationInfo(){
+void Retcon::LXMF::persistAllConversationInfo(){
     if(conversations_set.size() > 0) {
         FS* fs = retOsGlobalPtr->hal().fs;
         string path = LXMF_CONVERSATION_FOLDER  "message_set.bin";

@@ -13,7 +13,7 @@ protected:
 
 public:
     
-    const uint8_t id() const;
+    const uint8_t id() const { return _id; };
 
     RetRunnable(uint8_t id) : _id(id) {};
 

@@ -15,5 +15,12 @@ class UChat : public BaseApp {
     protected:
             RnsService * _rns_service;
 
+            void renderMainMenu();
+            
+            lv_obj_t * tabview;
+            lv_obj_t * msgview;
+            lv_obj_t * announceview;
+            lv_obj_t * statusview;
+
 
 };

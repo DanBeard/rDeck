@@ -98,7 +98,7 @@ static void flush_timer_cb(lv_timer_t *t)
 static void dips_render_start_cb(struct _lv_disp_drv_t * disp_drv)
 {
     if(flush_timer == NULL) {
-        flush_timer = lv_timer_create(flush_timer_cb, 10, NULL);
+        flush_timer = lv_timer_create(flush_timer_cb, 5, NULL);
     } else {
         lv_timer_resume(flush_timer);
     }
@@ -139,14 +139,13 @@ static void tdeck_pro_touchpad_read(lv_indev_drv_t * indev_drv, lv_indev_data_t 
     uint8_t touched = tDeckProTouch.getPoint(&last_x, &last_y, 1);
     if(touched) {
         data->state = LV_INDEV_STATE_PR;
-        /*Set the last pressed coordinates*/
-        data->point.x = last_x;
-        data->point.y = last_y;
-
         //Serial.printf("x=%d, y=%d\n", last_x, last_y);
     } else {
         data->state = LV_INDEV_STATE_REL;
     }
+    /*Set the last pressed coordinates*/
+    data->point.x = last_x;
+    data->point.y = last_y;
 }
 
 /* virtual */ void TDeckProScreen::initLvgl() {

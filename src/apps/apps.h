@@ -5,3 +5,4 @@
 #include "HelloWorld.h"
 #include "Notes.h"
 #include "Settings.h"
+#include "UChat.h"

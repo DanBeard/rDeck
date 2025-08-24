@@ -27,7 +27,7 @@ LV_IMG_DECLARE(img_start)
 LV_IMG_DECLARE(img_clock)
 LV_IMG_DECLARE(img_gear)
 LV_IMG_DECLARE(img_notes)
-
+LV_IMG_DECLARE(img_chat)
 
 
 // font
