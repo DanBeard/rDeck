@@ -21,102 +21,7 @@ RnsService::RnsService(uint8_t id): reticulum({RNS::Type::NONE}),
     rnsService = this;
 }
 
-// c style callbacks
-// static void onPacket(const RNS::Bytes& plaintext, const RNS::Packet& packet) {
-//     RNS::Bytes dest = data.mid(0, 16);
-//     RNS::Bytes source = data.mid(16, 16*2);
-//     RNS::Bytes signature = data.mid(2*16, 2*16 + 64);
-//     RNS::Bytes packed_payload = data.mid(2*16 + 64);
-
-//     INFO("LXMF: source: " + source.toHex());
-//     INFO("LXMF: signature: " + signature.toHex());
-//     INFO("LXMF: packed_payload: " + packed_payload.toHex());
-
-//     // FIXME: validate signatures
-//     JsonDocument doc;
-//     deserializeMsgPack(doc,  packed_payload.data()); //packed_payload.size()
-//     float timestamp = doc[0];
-//     const char* title = doc[1];
-//     const char* contents = doc[2];
-//     //size_t fieldsize?
-
-//     Serial.println("[RNS] PACKET---------");
-//     Serial.println(timestamp);
-//     Serial.println(title);
-//     Serial.println(contents);
-//     Serial.println("[RNS] END PACKET---------");
-// }
 static void onLinkPacket(const RNS::Bytes& plaintext, const RNS::Packet& packet) {
-
-    Serial.print("[[PACKET]] --");
-    RNS::Bytes my_hash = plaintext.mid(0, 16);
-    RNS::Bytes their_hash = plaintext.mid(16, 16);
-    RNS::Bytes signature = plaintext.mid(2*16, 64);
-    RNS::Bytes packed_payload = plaintext.mid(2*16 + 64);
-
-    INFO("LXMF: plaintext: " + plaintext.toHex());
-    INFO("LXMF: source: " + their_hash.toHex());
-    INFO("LXMF: dest: " + my_hash.toHex());
-    INFO("LXMF: signature: " + signature.toHex());
-    INFO("LXMF: packed_payload: " + packed_payload.toHex());
-    
-    //Serial.println(plaintext.toHex().c_str());
-    JsonDocument msg;
-    deserializeMsgPack(msg, packed_payload.data(), packed_payload.size());
-    // print to serial for debug
-    serializeJsonPretty(msg, Serial);
-
-    float timestamp = msg[0];
-    MsgPackBinary title = msg[1];
-    MsgPackBinary contents = msg[2];
-    char text[200] = {0};
-    memcpy(text, contents.data(), contents.size());
-    Serial.println(" ");
-    Serial.print(text);
-    Serial.println("\n/[[PACKET]] --");
-
-    RNS::Identity srcIdent = RNS::Identity::recall(their_hash);
-  
-    RNS::Destination srcDest(srcIdent, RNS::Type::Destination::OUT,RNS::Type::Destination::SINGLE, "lxmf",  "delivery");
-    JsonDocument reply_payload;
-    reply_payload.add(timestamp + 1);
-    reply_payload.add(MsgPackBinary("ECHO", strlen("ECHO")));
-    reply_payload.add(MsgPackBinary("ECHO", strlen("ECHO")));
-    reply_payload.add(nullptr); //fields. dont support em for now
-
-    uint8_t packed_reply_payload[300];
-    size_t bytes_written = serializeMsgPack(reply_payload, packed_reply_payload, 300);
-
-    RNS::Bytes hashed_part;
-    hashed_part.append(their_hash);
-    hashed_part.append(my_hash);
-    hashed_part.append(packed_reply_payload, bytes_written); 
-
-    RNS::Bytes hash = RNS::Identity::full_hash(hashed_part);
-    RNS::Bytes signed_part;
-    signed_part.append(hashed_part);
-    signed_part.append(hash);
-
-    RNS::Bytes reply_sig = rnsService->lxmf_delivery_src.sign(signed_part);
-    Serial.println(their_hash.size());
-    Serial.println(my_hash.size());
-    Serial.println(reply_sig.size());
-    RNS::Bytes packed;
-    ///packed.append(their_hash);
-    packed.append(my_hash);
-    packed.append(reply_sig);
-    packed.append(packed_reply_payload, bytes_written);
-    RNS::Packet *send_packet = new RNS::Packet(srcDest, packed);
-    const RNS::Link& link = *(packet.link());
-    //send_packet.link((RNS::Link&)link);
-    //send_packet.
-    retOsGlobalPtr->run_later([send_packet]() {
-        Serial.println("SENDING ECHO]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]");
-        send_packet->send();
-        delete send_packet;
-        Serial.println("/SENDING ECHO]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]");
-    }, 2500);
-   
     //rnsService->lxmf_delivery_src.s
     Retcon::LXMF::Message lxmf_msg(plaintext);
     Retcon::LXMF::addMessageToConversation(lxmf_msg);
@@ -124,7 +29,7 @@ static void onLinkPacket(const RNS::Bytes& plaintext, const RNS::Packet& packet)
 }
 static void onLink(RNS::Link& link) {
     rnsService->reticulum.should_persist_data();
-    Serial.println("LINK ESTABLISH? yay?");
+    Serial.println("LINK ESTABLISHED!");
     link.set_link_packet_callback(onLinkPacket);
 }
 
@@ -132,7 +37,6 @@ void RnsService::start(RetOS* retos){
     updateIcon(false);
 
     // pause and then load config
-
     RetHal hal = retos->hal();
     _lora = hal.lora;
     _fs = hal.fs;
@@ -145,7 +49,6 @@ void RnsService::start(RetOS* retos){
 
     lora_interface.mode(RNS::Type::Interface::MODE_GATEWAY);
 	RNS::Transport::register_interface(lora_interface);
-
 
     // TODO merge with settings config
     LoraConfig config {
@@ -299,7 +202,8 @@ void RnsService::tick(const time_t tMillis) {
         last_announce = tMillis;
         reticulum.should_persist_data();
     }
-     lora_interface_impl->tick(lora_interface);
+    reticulum.loop();
+    lora_interface_impl->tick(lora_interface);
 }
 
 void RnsService::updateIcon(bool status){
@@ -311,6 +215,74 @@ void RnsService::updateIcon(bool status){
     _retos->ui()->setServiceIcon(iconInfo);
 }
 
+
+
+void RnsService::sendLxmfMsg(const RNS::Bytes dest, const string &title, const string &contents) {
+    Retcon::LXMF::Message msg(lxmf_delivery_src.hash(), dest, title, contents);
+    msg.status = Retcon::LXMF::Message::STATUS::QUEUEING;
+
+    // if nothings going on, then just send it!
+    if(!_sending_message && _send_msg_queue.size() == 0) {
+        _sending_message = true;
+        transmitMsg(msg);
+    } else if(_send_msg_queue.size() > max_number_queued_msgs) {
+        return; // drop it
+    } else {
+        _send_msg_queue.push(msg);
+    }
+    if(!_sending_message) {
+        transmitMsg(_send_msg_queue.front());
+        _send_msg_queue.pop();
+    }
+
+    // TODO queue and send message AND retry
+}
+
+const queue<Retcon::LXMF::Message>& RnsService::queuedMsgs() const {
+    return _send_msg_queue;
+}
+
+void transmit_delivery_cb(const RNS::PacketReceipt &receipt) {
+    rnsService->_sending_message = false;
+    delete rnsService->_sending_packet;
+    rnsService->_current_sending_msg.status = Retcon::LXMF::Message::STATUS::SENT;
+    Retcon::LXMF::addMessageToConversation(rnsService->_current_sending_msg);
+
+    if(rnsService->_send_msg_queue.size() > 0) {
+        rnsService->transmitMsg(rnsService->_send_msg_queue.front());
+        rnsService->_send_msg_queue.pop();
+    }
+
+}
+void transmit_timeout_cb(const RNS::PacketReceipt &receipt) {
+    rnsService->_current_sending_msg.status = Retcon::LXMF::Message::STATUS::RETRY;
+
+    if(rnsService->_num_retries++ > RnsService::max_number_retries) {
+        delete rnsService->_sending_packet;
+        rnsService->_current_sending_msg.status = Retcon::LXMF::Message::STATUS::FAILED;
+        Retcon::LXMF::addMessageToConversation(rnsService->_current_sending_msg);
+        if(rnsService->_send_msg_queue.size() > 0) {
+            rnsService->transmitMsg(rnsService->_send_msg_queue.front());
+            rnsService->_send_msg_queue.pop();
+        }
+    }    
+    
+}
+void RnsService::transmitMsg(const Retcon::LXMF::Message &msg) {
+    if(_sending_message) return;
+    _sending_message = true;
+    _num_retries = 0;
+
+    _current_sending_msg = msg;
+    _current_sending_msg.status = Retcon::LXMF::Message::STATUS::SENDING;
+    _sending_packet = new RNS::Packet(lxmf_delivery_src, _current_sending_msg.fullMsg());
+    _sending_packet->send();
+    RNS::PacketReceipt receipt = _sending_packet->receipt();
+    receipt.set_timeout(packet_timeout_secs);
+    receipt.set_delivery_callback(transmit_delivery_cb);
+    receipt.set_timeout_callback(transmit_timeout_cb);
+
+}
 
 static FunctorCallback settingsCallback;
 static LoraConfig userConfig;

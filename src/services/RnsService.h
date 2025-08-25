@@ -1,7 +1,7 @@
 #pragma once
 #include "BaseService.h"
 
-
+#include <queue>
 #include "Reticulum.h"
 #include "Identity.h"
 #include "Destination.h"
@@ -15,6 +15,7 @@
 #include "RnsUtils/FileSystem.h"
 #include "RnsUtils/LoraInterface.h"
 #include "RnsUtils/RDeckAnnounceHandler.h"
+#include "RnsUtils/LXMFData.h"
 
 
 
@@ -24,6 +25,11 @@ class RnsService: public BaseService {
 
 
 public:
+
+    static const size_t max_number_queued_msgs = 5;
+    static const size_t max_number_retries = 4;
+    static const time_t packet_timeout_secs = 10;
+
     explicit RnsService(uint8_t id);
     virtual void start(RetOS* retos) override; // called after construction once the OS is ready to launch services
     virtual void tick(const time_t tmillis) override; // called periodically by OS so you can do work. Time varies by sleep and power level but ~1-3ms while awake
@@ -37,12 +43,13 @@ public:
     RNS::Destination lxmf_delivery_src;
     RNS::Reticulum reticulum;
 
+    void sendLxmfMsg(const RNS::Bytes dest, const string &title, const string &contents);
+    const queue<Retcon::LXMF::Message>& queuedMsgs() const;
+
     static constexpr const char* settingsSection = "reticulum";
     static bool drawSettings(lv_obj_t * column, Settings* settings);
     static void applySettings();
     static void mergeLoraSettings(LoraConfig& config);
-    
-
     //functions to get info
 
 protected:
@@ -63,5 +70,15 @@ protected:
 
     std::shared_ptr<RDeckAnnounceHandler> _announce_handler;
 
+    boolean _sending_message = false;
+    Retcon::LXMF::Message _current_sending_msg;
+    RNS::Packet *_sending_packet;
+    queue<Retcon::LXMF::Message> _send_msg_queue;
+    uint8_t _num_retries = 0;
+    // actually do the tranmit
+    void transmitMsg(const Retcon::LXMF::Message &msg);
+
+    friend void transmit_delivery_cb(const RNS::PacketReceipt &receipt);
+    friend void transmit_timeout_cb(const RNS::PacketReceipt &receipt);
 
 };

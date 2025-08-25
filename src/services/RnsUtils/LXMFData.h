@@ -39,14 +39,41 @@ namespace Retcon::LXMF {
 
     class Message {
         public:
-            Message(RNS::Bytes msg);
+            // referenced from https://github.com/markqvist/LXMF/blob/master/LXMF/LXMessage.py#L84
+            const static size_t max_lxmf_payload_size = 435;
+            enum STATUS {
+                UNSET = 0,
+                QUEUEING,
+                SENDING,
+                RETRY, // retrying
+                
+                COMPLETE_START,
+                SENT, // direct send, confirmed recv
+                FAILED, 
+                UNKNOWN_DEST, // could not find dest ident
+                PROPOGATION_NODE,
+                PAPER_MSG_GENERATED, // not just paper msg, but like, anything where generation is the last step and we can't confirm recpt.
+
+            };
+            Message();
+            Message(RNS::Bytes msg); // over the wire already packed
+            Message(RNS::Bytes src,RNS::Bytes dest, string title, string content); // made by an app, will need to pack
+            Message(JsonArray array); // serialized in json/msgpack. Already packed and unpacked.  TODO: DO we need to double up like this? maybe we only load the unpacked versions to save RAM
             RNS::Bytes src;
             RNS::Bytes dest;
             RNS::Bytes signature;
             RNS::Bytes packed_payload;
 
+            string title;
+            string content;
+            time_t timestamp = 0;
+            
+            STATUS status = STATUS::UNSET;
+
             RNS::Bytes fullMsg() const;
-            void serialize(JsonArray array);
+            void pack(RNS::Destination& src, RNS::Destination& dest); // turn title/content/etc into packed buffer
+            void unpack(); // turn packed buffer into title/content/etc
+            void serialize(JsonArray &array);
     };
 
     class ConversationMetaInfo {

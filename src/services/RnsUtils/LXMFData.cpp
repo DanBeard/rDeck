@@ -20,7 +20,7 @@ AnnounceData::AnnounceData(JsonArray &array) {
     last_heard = array[2];
 }
 
-AnnounceData::AnnounceData(const RNS::Bytes &dest, const RNS::Bytes &app_data ,const time_t last_heard) : dest(dest), app_data(app_data), last_heard(last_heard){
+AnnounceData::AnnounceData(const RNS::Bytes &dest, const RNS::Bytes &app_data, const time_t last_heard) : dest(dest), app_data(app_data), last_heard(last_heard){
 
 }
 
@@ -31,13 +31,85 @@ void AnnounceData::serialize(JsonArray &array)  {
     array.add(last_heard);
 }
 
-Message::Message(RNS::Bytes msg) :
+Retcon::LXMF::Message::Message() 
+{
+}
+
+
+Retcon::LXMF::Message::Message(RNS::Bytes msg) :
     dest(msg.mid(0, 16)), src(msg.mid(16, 16)),
     signature(msg.mid(2*16, 64)), packed_payload(msg.mid(2*16 + 64))
 {
 }
 
-RNS::Bytes Message::fullMsg() const { 
+Retcon::LXMF::Message::Message(RNS::Bytes src, RNS::Bytes dest, string title, string content) :src(src), dest(dest), title(title), content(content) {
+
+}
+
+Retcon::LXMF::Message::Message(JsonArray array) {
+    // only unpkaced bits are stored
+    MsgPackBinary srcb = array[0].as<MsgPackBinary>();
+    dest.assign((uint8_t*)srcb.data(), srcb.size());
+
+    MsgPackBinary destb = array[1].as<MsgPackBinary>();
+    dest.assign((uint8_t*)destb.data(), destb.size());
+
+    title = array[2].as<string>();
+    content = array[3].as<string>();
+    status = (STATUS) array[4].as<uint8_t>();
+} 
+
+void Retcon::LXMF::Message::serialize(JsonArray &array) {
+    // only unpkaced bits are stored
+    array.add(MsgPackBinary(src.data(), src.size()));
+    array.add(MsgPackBinary(dest.data(), dest.size()));
+    array.add(title);
+    array.add(content);
+    array.add((uint8_t) status);
+
+} 
+
+ void Retcon::LXMF::Message::pack(RNS::Destination& src, RNS::Destination& dest) {
+    // fill timestamp with NOW()
+    time(&timestamp);
+
+    JsonDocument reply_payload;
+    reply_payload.add(timestamp);
+    reply_payload.add(MsgPackBinary(title.c_str(), title.size()));
+    reply_payload.add(MsgPackBinary(content.c_str(), content.size()));
+    reply_payload.add(nullptr); //fields. dont support em for now
+    
+
+    uint8_t packed_payload[max_lxmf_payload_size];
+    size_t bytes_written = serializeMsgPack(reply_payload, packed_payload, max_lxmf_payload_size);
+
+    this->dest = dest.hash();
+    this->src = src.hash();
+
+    RNS::Bytes hashed_part;
+    hashed_part.append(dest.hash());
+    hashed_part.append(src.hash());
+    hashed_part.append(packed_payload, bytes_written); 
+
+    RNS::Bytes hash = RNS::Identity::full_hash(hashed_part);
+    RNS::Bytes signed_part;
+    signed_part.append(hashed_part);
+    signed_part.append(hash);
+
+    signature = src.sign(signed_part);
+    this->packed_payload.assign(packed_payload, bytes_written);
+    // RNS::Bytes packed;
+    // packed.append(dest.hash());
+    // packed.append(src.hash());
+    // packed.append(reply_sig);
+    // packed.append(packed_reply_payload, bytes_written);
+    //RNS::Packet *send_packet = new RNS::Packet(srcDest, packed);
+ }
+void Retcon::LXMF::Message::unpack() {
+    
+}
+
+RNS::Bytes Retcon::LXMF::Message::fullMsg() const { 
     return dest + src + signature + packed_payload;
 }
 
@@ -203,11 +275,12 @@ void ConversationMetaInfo::deserialize(JsonObject &obj) {
 void Conversation::serialize(JsonDocument &doc) {
     JsonObject infoObj = doc["info"].createNestedObject();
     info.serialize(infoObj);
-    JsonArray msgArray = doc["messages"].createNestedArray();
+    JsonArray msgListArray = doc["messages"].createNestedArray();
 
+    int i = 0;
     for(Message msg : this->msgs) {
-        RNS::Bytes fullMsg = msg.fullMsg();
-        msgArray.add(MsgPackBinary(fullMsg.data(), fullMsg.size()));
+       JsonArray msgArray =  msgListArray[i++].createNestedArray();
+       msg.serialize(msgArray);
     }
 
 }
@@ -216,12 +289,10 @@ void Conversation::deserialize(JsonDocument &doc) {
     JsonObject infoObj = doc["info"];
     info.deserialize(infoObj);
 
-    JsonArray msgArray = doc["messages"];
-    for(int i = 0; i < msgArray.size() && i < max_messages; i++) {
-        RNS::Bytes bytes;
-        MsgPackBinary mbin = msgArray[i].as<MsgPackBinary>();
-        bytes.assign((uint8_t *) mbin.data(), mbin.size());
-        msgs.push_back(Message(bytes));
+    JsonArray msgListArray = doc["messages"];
+    for(int i = 0; i < msgListArray.size() && i < max_messages; i++) {
+        JsonArray msgArray = msgListArray[i];
+        msgs.push_back(Message(msgArray));
     }
 }
 
