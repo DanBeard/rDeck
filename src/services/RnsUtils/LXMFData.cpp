@@ -106,7 +106,18 @@ void Retcon::LXMF::Message::serialize(JsonArray &array) {
     //RNS::Packet *send_packet = new RNS::Packet(srcDest, packed);
  }
 void Retcon::LXMF::Message::unpack() {
-    
+    JsonDocument msg;
+    deserializeMsgPack(msg, packed_payload.data(), packed_payload.size());
+    // print to serial for debug
+    //serializeJsonPretty(msg, Serial);
+
+    timestamp = msg[0];
+
+    MsgPackBinary titlebin = msg[1];
+    MsgPackBinary contentsbin = msg[2];
+
+    title = string((const char*)titlebin.data(), titlebin.size());
+    content = string((const char*)contentsbin.data(), contentsbin.size());
 }
 
 RNS::Bytes Retcon::LXMF::Message::fullMsg() const { 

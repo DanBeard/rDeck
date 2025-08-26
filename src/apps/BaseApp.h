@@ -41,5 +41,9 @@ public:
     bool keepAwake() const {return _keep_awake;}
     virtual EventStatus onEvent(const Event& event);
 
+    // special back button action, if the app itsself wants to control what happens. 
+    // returning an  empty function<> means do the default of closing the app entirely
+    virtual const function<void()> customBackButtonAction()   { return function<void()>(); }
+
 
 };

@@ -2,6 +2,7 @@
 #include "retHal/Screen/BaseScreen.h"
 #include "retOS.h"
 #include <Arduino.h>
+#include "apps/BaseApp.h"
 
 RetUI::RetUI(RetOS* os) : _retos(os) {
      
@@ -74,7 +75,15 @@ void RetUI::clear_app_screen() {
 
 
 static void back_btn_event_cb(lv_event_t *e) {
-    Serial.println("Back to launcher baby!!");
+    BaseApp * active_app =  retOsGlobalPtr->activeApp();
+    if(active_app != nullptr) {
+        const function<void()> custom_back_action = active_app->customBackButtonAction();
+        if(custom_back_action) {
+            custom_back_action();
+            return;
+        }
+    }
+    // Default -- close app and go back to launcher
     retOsGlobalPtr->backToLauncher();
 }
 

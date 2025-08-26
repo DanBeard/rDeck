@@ -76,6 +76,7 @@ public:
     const forward_list<AppInfo>& appInfo() const;
 
     void launchApp(int8_t id);
+    BaseApp* activeApp() const {return _active_app;};
     void backToLauncher();
 
     // expected to be called in the services task ONLY!!!

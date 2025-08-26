@@ -35,6 +35,35 @@ namespace Retcon::LXMF {
              boolean operator==(const AnnounceData& other) const {
                 return last_heard == other.last_heard && dest == other.dest && app_data == other.app_data;
             }
+
+            string displayName() const {
+                if ( app_data.size() > 3 && (( app_data.data()[0] >= 0x90 && app_data.data()[0] <= 0x9f) || app_data.data()[0] == 0xdc)) {
+                    JsonDocument doc;
+                    deserializeMsgPack(doc, app_data.data(), app_data.size());
+                    if(doc.is<JsonArray>()) {
+                        if(doc[0].is<MsgPackBinary>()) {
+                            MsgPackBinary nameBin = doc[0].as<MsgPackBinary>();
+                            if(nameBin.size() > 0) {
+                                // this should add the /0 ... right?
+                            return string((const char*)nameBin.data(), nameBin.size());
+                        } 
+                        }
+                       
+                        
+                        if(doc[0].is<string>()) {
+                            string nameStr = doc[0].as<string>();
+                            if(nameStr.size() > 0) {
+                                return nameStr;
+                            }
+                        }
+                        // welp, dunno so just fall down to the hex
+                    }
+
+                }
+                // if we can't find a name in app_data then just the hex *shrug*
+                return dest.toHex();
+
+            }
     };
 
     class Message {
@@ -55,6 +84,12 @@ namespace Retcon::LXMF {
                 PAPER_MSG_GENERATED, // not just paper msg, but like, anything where generation is the last step and we can't confirm recpt.
 
             };
+
+            enum SENDER {
+                UNKNOWN = 0,
+                ME = 1,
+                THEM = 2
+            };
             Message();
             Message(RNS::Bytes msg); // over the wire already packed
             Message(RNS::Bytes src,RNS::Bytes dest, string title, string content); // made by an app, will need to pack
@@ -67,10 +102,28 @@ namespace Retcon::LXMF {
             string title;
             string content;
             time_t timestamp = 0;
+            mutable SENDER sender = UNKNOWN;
+
             
             STATUS status = STATUS::UNSET;
 
             RNS::Bytes fullMsg() const;
+            // helper for quickly figuring out who sent a message
+            boolean msgSentByThem(RNS::Bytes& their_hash) const {
+                switch(sender) {
+                    case ME:
+                       return false;
+                    case THEM:
+                        return true;
+                    default:
+                        if(src == their_hash) {
+                            sender = THEM;
+                            return true;
+                        } 
+                        sender = ME;
+                        return false;
+                }
+            }
             void pack(RNS::Destination& src, RNS::Destination& dest); // turn title/content/etc into packed buffer
             void unpack(); // turn packed buffer into title/content/etc
             void serialize(JsonArray &array);

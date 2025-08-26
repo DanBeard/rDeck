@@ -123,7 +123,7 @@ void RnsService::start(RetOS* retos){
     //RNS::Bytes prv_bytes;
     //prv_bytes.assignHex("78E7D93E28D55871608FF13329A226CABC3903A357388A035B360162FF6321570B092E0583772AB80BC425F99791DF5CA2CA0A985FF0415DAB419BBC64DDFAE8");
     //
-    _announce_handler = make_shared<RDeckAnnounceHandler>();
+    _announce_handler = make_shared<RDeckAnnounceHandler>("lxmf.delivery");
     RNS::Transport::register_announce_handler(_announce_handler);
 
     lxmf_delivery_src = RNS::Destination(identity, RNS::Type::Destination::IN, RNS::Type::Destination::SINGLE, "lxmf", "delivery");
