@@ -14,7 +14,7 @@ void RDeckAnnounceHandler::received_announce(const RNS::Bytes& destination_hash,
 		time_t now;
     	time(&now);
 		Retcon::LXMF::AnnounceData adata(destination_hash, app_data, now);
-		announce_set->insert(adata);
+		addAnnounceData(adata);
 
 		if(now - last_persist >= persist_delay_secs) {
 			Retcon::LXMF::persistAnnounceData();

@@ -12,15 +12,19 @@ class UChat : public BaseApp {
         virtual void start(RetOS* retos) override;
         virtual void tick(const time_t tickMillis) override;
         virtual void stop() override;
+        virtual const function<void()> customBackButtonAction() override;
+        virtual EventStatus onEvent(const Event& event) override;
 
         void openConversation(const RNS::Bytes& their_hash);
-        virtual const function<void()> customBackButtonAction() override;
+        void sendToCurrentConversation(const char* title, const char* content);
+
 
     protected:
             RnsService * _rns_service;
 
             void renderMainMenu();
             void renderMessageInConversation(const Retcon::LXMF::Message& message);
+            void drawCurrentConversation(bool clear=true);
 
             lv_obj_t * tabview;
             lv_obj_t * msgview;
@@ -30,6 +34,8 @@ class UChat : public BaseApp {
 
             lv_obj_t * conversation_modal = nullptr;
             Retcon::LXMF::Conversation *current_conv = nullptr;
+
+            set<shared_ptr<Retcon::LXMF::Message>> _queued_msgs;
 
 
 };

@@ -52,6 +52,19 @@ void UChat::renderMessageInConversation(const Retcon::LXMF::Message& message) {
 
 }
 
+void UChat::sendToCurrentConversation(const char* title, const char* content) {
+    _rns_service->sendLxmfMsg(current_conv->info.their_hash, title, content);
+}
+
+static void send_msg_cb(lv_event_t * event) {
+    lv_obj_t* btm = lv_event_get_target(event);
+    lv_obj_t* ta = (lv_obj_t*) lv_event_get_user_data(event);
+    const char* msg_txt = lv_textarea_get_text(ta);
+    // TODO no titles for now.
+    uchat_ptr->sendToCurrentConversation("", msg_txt);
+    lv_textarea_set_text(ta, "");
+}
+
 void UChat::openConversation(const RNS::Bytes& their_hash) {
     if(conversation_modal != nullptr) {
         lv_obj_del(conversation_modal);
@@ -61,6 +74,14 @@ void UChat::openConversation(const RNS::Bytes& their_hash) {
     current_conv = Retcon::LXMF::loadAsCurrentConversation(their_hash);
 
     conversation_modal = lv_obj_create(screen);
+    drawCurrentConversation(false);
+}
+
+void UChat::drawCurrentConversation(bool clear) {
+    if(clear) {
+        lv_obj_clean(conversation_modal);
+    }
+
     lv_obj_set_size(conversation_modal, lv_pct(100), lv_pct(100));
     lv_obj_set_style_pad_all(conversation_modal, 1, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_flex_flow(conversation_modal, LV_FLEX_FLOW_ROW);
@@ -74,9 +95,28 @@ void UChat::openConversation(const RNS::Bytes& their_hash) {
     if(title_txt.size() < 1) title_txt = current_conv->info.their_hash.toHex();
 
     lv_label_set_text(title, title_txt.c_str());
+    lv_obj_set_size(title, lv_pct(100), LV_SIZE_CONTENT);
 
+    // text input
+    lv_obj_t * ta = lv_textarea_create(conversation_modal);
+    lv_group_add_obj(_retos->ui()->default_input_group(), ta);
+    lv_obj_add_flag(ta, LV_OBJ_FLAG_FLEX_IN_NEW_TRACK);
+    lv_obj_set_flex_grow(ta, 3); // GROW!
+    lv_obj_set_style_border_width(ta, 2, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_border_color(ta, _retos->ui()->fg_color(), LV_PART_MAIN | LV_STATE_DEFAULT);
 
-    
+    lv_obj_t * send_btn = lv_btn_create(conversation_modal);
+    lv_obj_set_size(send_btn, 50, 50);
+
+    lv_obj_set_style_border_width(send_btn, 1, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_border_color(send_btn, _retos->ui()->fg_color(), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_add_event_cb(send_btn, send_msg_cb, LV_EVENT_CLICKED, ta);
+
+    lv_obj_t* send_btn_label = lv_label_create(send_btn);
+    lv_obj_set_size(send_btn_label, lv_pct(100), LV_SIZE_CONTENT);
+    lv_label_set_text(send_btn_label, LV_SYMBOL_PLAY);
+    lv_obj_set_style_text_color(send_btn_label, _retos->ui()->fg_color(),  LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_center(send_btn_label);
 }
 
 const function<void()> UChat::customBackButtonAction() {
@@ -147,7 +187,7 @@ void UChat::renderMainMenu() {
         // TODO Actually list conversations with buttons that will open the conversation view over the main menu
     }
 
-    set<AnnounceData> *announces = getAnnounceData();
+    const set<AnnounceData> *announces = getAnnounceData();
     if(announces->size() == 0) {
         lv_obj_t *label2 = lv_label_create(announceview);
         lv_obj_set_size(label2, LV_SIZE_CONTENT,LV_SIZE_CONTENT);   /// 1
@@ -190,3 +230,41 @@ void UChat::renderMainMenu() {
         lv_label_set_text(label2, "Status view not implemented yet");
 
 }
+
+
+EventStatus UChat::onEvent(const Event& event) {
+
+    switch(event.type) {
+        case NEW_MESSAGE:
+        {
+            // TODO: more surgical updates instead of just redrawing the whole dang thing
+            // like, is this message even IN the open convo?
+            if(conversation_modal != nullptr) {
+                drawCurrentConversation(true);
+            }
+            return HANDLED_PROPOGATE;
+        }
+
+        case MESSAGE_UPDATE:
+            {
+                if(_queued_msgs.size() > 0) {
+                    shared_ptr<Retcon::LXMF::Message> msg_ptr = std::static_pointer_cast<Retcon::LXMF::Message>(event.data);
+                    // if it's one of our queued messages
+                    if(_queued_msgs.find(msg_ptr) != _queued_msgs.end()){
+                        // right now just draw everything in a conversation is open.
+                        // TODO: more surgical updates instead of just redrawing the whole dang thing
+                        if(conversation_modal != nullptr) {
+                            drawCurrentConversation(true);
+                        }
+                        return HANDLED_PROPOGATE;
+                    }
+                }
+               
+            }
+        
+        default:
+            return IGNORED;
+    }
+
+}
+

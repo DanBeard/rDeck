@@ -103,7 +103,6 @@ namespace Retcon::LXMF {
             string content;
             time_t timestamp = 0;
             mutable SENDER sender = UNKNOWN;
-
             
             STATUS status = STATUS::UNSET;
 
@@ -168,7 +167,8 @@ namespace Retcon::LXMF {
     };
 
     
-    set<AnnounceData>* getAnnounceData();
+    const set<AnnounceData>* getAnnounceData();
+    void addAnnounceData(AnnounceData &a);
     void persistAnnounceData();
 
     set<ConversationMetaInfo>* getAllConversationInfo();

@@ -121,10 +121,15 @@ void Retcon::LXMF::Message::unpack() {
 }
 
 RNS::Bytes Retcon::LXMF::Message::fullMsg() const { 
-    return dest + src + signature + packed_payload;
+    RNS::Bytes full;
+    full.append(dest);
+    full.append(src);
+    full.append(signature);
+    full.append(packed_payload);
+    return full;
 }
 
-set<AnnounceData>* Retcon::LXMF::getAnnounceData() {
+const set<AnnounceData>* Retcon::LXMF::getAnnounceData() {
     if(!loaded)  {
         FS* fs = retOsGlobalPtr->hal().fs;
         if(fs->exists(LXMF_ANNOUNCE_DATA_FILE_PATH)) {
@@ -147,6 +152,17 @@ set<AnnounceData>* Retcon::LXMF::getAnnounceData() {
     }
     
     return &lxmf_data;
+}
+
+void Retcon::LXMF::addAnnounceData(AnnounceData &a) {
+    // make sure we're loaded
+    getAnnounceData();
+    // trim to size
+    while(lxmf_data.size() > NUM_ANNOUNCES - 1) {
+        lxmf_data.erase(std::prev(lxmf_data.end()));
+    }
+
+    lxmf_data.insert(a);
 }
 
 void Retcon::LXMF::persistAnnounceData(){

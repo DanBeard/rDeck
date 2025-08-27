@@ -20,6 +20,7 @@ enum EventType {
     TIME_CHANGE,  // Time change like new NTP or timezone. NOT going to tick every second/minute
     LOCATION_CHANGE, // Significant Location change like GPS. Poll instead for more precise data
     NEW_MESSAGE, // New external message like over LXMF or something
+    MESSAGE_UPDATE, // message status changed, like when sending a message
 
     INTER_SERVICE_COMMS_START, // events that let services communicate with eachother
     SERVICE_REQUEST, // request some data arg[0] is request_ID, other args unused

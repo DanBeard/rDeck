@@ -2,6 +2,7 @@
 #include "BaseService.h"
 
 #include <queue>
+#include <map>
 #include "Reticulum.h"
 #include "Identity.h"
 #include "Destination.h"
@@ -43,8 +44,11 @@ public:
     RNS::Destination lxmf_delivery_src;
     RNS::Reticulum reticulum;
 
-    void sendLxmfMsg(const RNS::Bytes dest, const string &title, const string &contents);
-    const queue<Retcon::LXMF::Message>& queuedMsgs() const;
+    // send an LXmfMesssage. Pass in an updater function that wi;; be called when status changes with the message object
+    typedef function<void(const shared_ptr<Retcon::LXMF::Message>&)> msg_update_cb;
+
+    shared_ptr<Retcon::LXMF::Message>& sendLxmfMsg(const RNS::Bytes dest, const string &title, const string &contents);
+    const queue<shared_ptr<Retcon::LXMF::Message>>& queuedMsgs() const;
 
     static constexpr const char* settingsSection = "reticulum";
     static bool drawSettings(lv_obj_t * column, Settings* settings);
@@ -71,12 +75,15 @@ protected:
     std::shared_ptr<RDeckAnnounceHandler> _announce_handler;
 
     boolean _sending_message = false;
-    Retcon::LXMF::Message _current_sending_msg;
+    shared_ptr<Retcon::LXMF::Message> _current_sending_msg;
     RNS::Packet *_sending_packet;
-    queue<Retcon::LXMF::Message> _send_msg_queue;
+    std::queue<shared_ptr<Retcon::LXMF::Message>> _send_msg_queue;
+
     uint8_t _num_retries = 0;
     // actually do the tranmit
-    void transmitMsg(const Retcon::LXMF::Message &msg);
+    void transmitMsg(shared_ptr<Retcon::LXMF::Message> &msg);
+    
+    void sendMessageUpdateEvent(shared_ptr<Retcon::LXMF::Message> &msg);
 
     friend void transmit_delivery_cb(const RNS::PacketReceipt &receipt);
     friend void transmit_timeout_cb(const RNS::PacketReceipt &receipt);

@@ -23,8 +23,16 @@ RnsService::RnsService(uint8_t id): reticulum({RNS::Type::NONE}),
 
 static void onLinkPacket(const RNS::Bytes& plaintext, const RNS::Packet& packet) {
     //rnsService->lxmf_delivery_src.s
-    Retcon::LXMF::Message lxmf_msg(plaintext);
-    Retcon::LXMF::addMessageToConversation(lxmf_msg);
+    shared_ptr<Retcon::LXMF::Message> lxmf_msg = make_shared<Retcon::LXMF::Message>(plaintext);
+    Retcon::LXMF::addMessageToConversation(*lxmf_msg);
+
+    // send new message event
+    Event e;
+    e.src = rnsService;
+    e.type = NEW_MESSAGE;
+    e.data = lxmf_msg;
+    
+    retOsGlobalPtr->publishEvent(e);
 
 }
 static void onLink(RNS::Link& link) {
@@ -215,19 +223,29 @@ void RnsService::updateIcon(bool status){
     _retos->ui()->setServiceIcon(iconInfo);
 }
 
+void RnsService::sendMessageUpdateEvent(shared_ptr<Retcon::LXMF::Message> &msg) {
+    Event e;
+    e.src = this;
+    e.type = MESSAGE_UPDATE;
+    e.data = msg;
 
+    _retos->publishEvent(e);
+}
 
-void RnsService::sendLxmfMsg(const RNS::Bytes dest, const string &title, const string &contents) {
-    Retcon::LXMF::Message msg(lxmf_delivery_src.hash(), dest, title, contents);
-    msg.status = Retcon::LXMF::Message::STATUS::QUEUEING;
+shared_ptr<Retcon::LXMF::Message>& RnsService::sendLxmfMsg(const RNS::Bytes dest, const string &title, const string &contents) {
+    shared_ptr<Retcon::LXMF::Message> msg = make_shared<Retcon::LXMF::Message>(lxmf_delivery_src.hash(), dest, title, contents);
+    msg->status = Retcon::LXMF::Message::STATUS::QUEUEING;
 
+    Serial.println("SENDING LXMF MESSAGE");
     // if nothings going on, then just send it!
     if(!_sending_message && _send_msg_queue.size() == 0) {
-        _sending_message = true;
+        Serial.println("TRANSMITTING LXMF MESSAGE");
         transmitMsg(msg);
     } else if(_send_msg_queue.size() > max_number_queued_msgs) {
-        return; // drop it
+        Serial.println("DROPPING LXMF MESSAGE");
+        return msg; // drop it
     } else {
+        Serial.println("QUEUEING LXMF MESSAGE");
         _send_msg_queue.push(msg);
     }
     if(!_sending_message) {
@@ -235,18 +253,18 @@ void RnsService::sendLxmfMsg(const RNS::Bytes dest, const string &title, const s
         _send_msg_queue.pop();
     }
 
-    // TODO queue and send message AND retry
+    return msg;
 }
 
-const queue<Retcon::LXMF::Message>& RnsService::queuedMsgs() const {
+const queue<shared_ptr<Retcon::LXMF::Message>>& RnsService::queuedMsgs() const {
     return _send_msg_queue;
 }
 
 void transmit_delivery_cb(const RNS::PacketReceipt &receipt) {
     rnsService->_sending_message = false;
     delete rnsService->_sending_packet;
-    rnsService->_current_sending_msg.status = Retcon::LXMF::Message::STATUS::SENT;
-    Retcon::LXMF::addMessageToConversation(rnsService->_current_sending_msg);
+    rnsService->_current_sending_msg->status = Retcon::LXMF::Message::STATUS::SENT;
+    Retcon::LXMF::addMessageToConversation(*(rnsService->_current_sending_msg));
 
     if(rnsService->_send_msg_queue.size() > 0) {
         rnsService->transmitMsg(rnsService->_send_msg_queue.front());
@@ -255,27 +273,37 @@ void transmit_delivery_cb(const RNS::PacketReceipt &receipt) {
 
 }
 void transmit_timeout_cb(const RNS::PacketReceipt &receipt) {
-    rnsService->_current_sending_msg.status = Retcon::LXMF::Message::STATUS::RETRY;
-
+    rnsService->_current_sending_msg->status = Retcon::LXMF::Message::STATUS::RETRY;
+    
     if(rnsService->_num_retries++ > RnsService::max_number_retries) {
         delete rnsService->_sending_packet;
-        rnsService->_current_sending_msg.status = Retcon::LXMF::Message::STATUS::FAILED;
-        Retcon::LXMF::addMessageToConversation(rnsService->_current_sending_msg);
+        rnsService->_sending_message = false;
+        rnsService->_current_sending_msg->status = Retcon::LXMF::Message::STATUS::FAILED;
+        Retcon::LXMF::addMessageToConversation(*(rnsService->_current_sending_msg));
+        
         if(rnsService->_send_msg_queue.size() > 0) {
             rnsService->transmitMsg(rnsService->_send_msg_queue.front());
             rnsService->_send_msg_queue.pop();
         }
-    }    
+    } else {
+        rnsService->transmitMsg(rnsService->_current_sending_msg);
+    }
     
 }
-void RnsService::transmitMsg(const Retcon::LXMF::Message &msg) {
-    if(_sending_message) return;
+void RnsService::transmitMsg(shared_ptr<Retcon::LXMF::Message>& msg) {
+    if(_sending_message && msg != _current_sending_msg) return;
     _sending_message = true;
     _num_retries = 0;
 
+    // find the dest destination and pack the msg
+    RNS::Identity their_ident = RNS::Identity::recall(msg->dest);
+    RNS::Destination their_dest(their_ident, RNS::Type::Destination::OUT,RNS::Type::Destination::SINGLE, "lxmf",  "delivery");
+    msg->pack(lxmf_delivery_src,their_dest);
+
     _current_sending_msg = msg;
-    _current_sending_msg.status = Retcon::LXMF::Message::STATUS::SENDING;
-    _sending_packet = new RNS::Packet(lxmf_delivery_src, _current_sending_msg.fullMsg());
+    _current_sending_msg->status = Retcon::LXMF::Message::STATUS::SENDING;
+    RNS::Bytes fullMsg = _current_sending_msg->fullMsg();
+    _sending_packet = new RNS::Packet(lxmf_delivery_src, fullMsg);
     _sending_packet->send();
     RNS::PacketReceipt receipt = _sending_packet->receipt();
     receipt.set_timeout(packet_timeout_secs);
