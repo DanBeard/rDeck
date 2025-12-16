@@ -17,6 +17,6 @@ public:
 
     RetRunnable(uint8_t id) : _id(id) {};
 
-    virtual void tick(const time_t tickMillis) = 0; // called periodically by OS so you can do work. TIme varies by sleep and power level.
+    virtual void tick(const unsigned long tickMillis) = 0; // called periodically by OS so you can do work. TIme varies by sleep and power level.
 
 };

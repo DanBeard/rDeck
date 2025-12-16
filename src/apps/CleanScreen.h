@@ -1,7 +1,7 @@
 #pragma once
 #include "BaseApp.h"
 
-class HelloWorld : public BaseApp {
+class CleanScreen : public BaseApp {
     public:
     // inherit default ctor
     using BaseApp::BaseApp;

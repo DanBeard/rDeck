@@ -9,7 +9,7 @@ class GPSService: public BaseService {
 public:
 
     virtual void start(RetOS* retos) override; // called after construction once the OS is ready to launch services
-    virtual void tick(const time_t tmillis) override; // called periodically by OS so you can do work. TIme varies by sleep and power level.
+    virtual void tick(const unsigned long tmillis) override; // called periodically by OS so you can do work. TIme varies by sleep and power level.
 
     bool isValid = false;
 

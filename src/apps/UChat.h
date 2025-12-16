@@ -10,7 +10,7 @@ class UChat : public BaseApp {
         using BaseApp::BaseApp;
 
         virtual void start(RetOS* retos) override;
-        virtual void tick(const time_t tickMillis) override;
+        virtual void tick(const unsigned long tickMillis) override;
         virtual void stop() override;
         virtual const function<void()> customBackButtonAction() override;
         virtual EventStatus onEvent(const Event& event) override;

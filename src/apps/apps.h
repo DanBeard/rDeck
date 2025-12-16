@@ -6,3 +6,4 @@
 #include "Notes.h"
 #include "Settings.h"
 #include "UChat.h"
+#include "CleanScreen.h"

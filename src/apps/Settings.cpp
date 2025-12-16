@@ -15,7 +15,7 @@ static JsonDocument _root_settings;
 
 }
 
-/*virtual */ void Settings::tick(const time_t tickMillis) {
+/*virtual */ void Settings::tick(const unsigned long tickMillis) {
     
 }
 

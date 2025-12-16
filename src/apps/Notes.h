@@ -10,7 +10,7 @@ class NotesApp : public BaseApp {
     lv_obj_t * ta;
 
     virtual void start(RetOS* retos);
-    virtual void tick(const time_t tickMillis);
+    virtual void tick(const unsigned long tickMillis);
     virtual void stop();
 
 

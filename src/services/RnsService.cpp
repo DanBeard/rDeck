@@ -63,8 +63,8 @@ void RnsService::start(RetOS* retos){
         .frequency =  914.875F,
         .bandwidth =  250.000F,
         .sf = 7,
-        .cr = 8,
-        .power = 16,
+        .cr = 5,
+        .power = 19,
         .preamble_len = 8,
         .crc = 0,
         .explicitHeader = true
@@ -165,7 +165,11 @@ void RnsService::start(RetOS* retos){
 
     // set to running
     _status = RUNNING;
-    announce();
+    retos->run_later([this]() {
+        Serial.println("RNS ANNOUNCE INITIAL");
+        announce();
+    }, 1500);
+   
 }
 
 void RnsService::saveUserInfo() {
@@ -202,9 +206,9 @@ void RnsService::announce() {
 }
 
 static unsigned long last_announce = 0;
-void RnsService::tick(const time_t tMillis) {
+void RnsService::tick(const unsigned long tMillis) {
     // TODO TEMP FOR TESTING REMOVE ME OR MAKE MUCH LONGER OR VIA CONFIG
-    if(tMillis - last_announce > (10*60*1000)){
+    if(tMillis - last_announce > (10*60*1000) || tMillis < last_announce){
         Serial.println("RNS ANNOUNCE");
         announce();
         last_announce = tMillis;
@@ -391,6 +395,9 @@ void RnsService::applySettings() {
 void RnsService::mergeLoraSettings(LoraConfig& config) {
     JsonObject _settings = Settings::getSettings(settingsSection);
     JsonObject loraSettings = _settings["lora"];
+
+    serializeJsonPretty(loraSettings, Serial);
+    
     // copy over any settings changes
     if(loraSettings.containsKey("fr")) {
         config.frequency = loraSettings["fr"];

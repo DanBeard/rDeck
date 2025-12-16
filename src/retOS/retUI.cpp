@@ -28,7 +28,8 @@ void RetUI::init() {
     lv_obj_set_x(loading_label, 0);
     lv_obj_set_y(loading_label, 0);
     lv_obj_set_align(loading_label, LV_ALIGN_CENTER);
-    lv_obj_set_style_text_color(loading_label, fg_color(), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_bg_color(_loading_screen, fg_color(), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_text_color(loading_label, bg_color(), LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_text_opa(loading_label, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_label_set_text(loading_label, "Loading...");
 

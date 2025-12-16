@@ -8,7 +8,7 @@ void GPSService::start(RetOS* retos){
     // set to running
     _status = RUNNING;
 }
-void GPSService::tick(const time_t tMillis) {
+void GPSService::tick(const unsigned long tMillis) {
     _gps->tick();
     bool newIsValid = _gps->GPS->location.isValid();
     if(newIsValid != isValid){

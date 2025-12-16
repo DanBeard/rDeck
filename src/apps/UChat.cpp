@@ -16,7 +16,7 @@ UChat * uchat_ptr;
 
 }
 
-/*virtual */ void UChat::tick(const time_t tickMillis) {
+/*virtual */ void UChat::tick(const unsigned long tickMillis) {
     
 }
 

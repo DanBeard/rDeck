@@ -166,6 +166,11 @@ void Retcon::LXMF::addAnnounceData(AnnounceData &a) {
 }
 
 void Retcon::LXMF::persistAnnounceData(){
+
+    Serial.print("persisting ");
+    Serial.print(lxmf_data.size());
+    Serial.println(" announces ");
+
     // trim to size
     while(lxmf_data.size() > NUM_ANNOUNCES) {
         lxmf_data.erase(std::prev(lxmf_data.end()));
@@ -216,6 +221,15 @@ static void load_converstion(const RNS::Bytes &src_hash, Conversation &conv) {
         doc.clear();
     } else {
         conv.info.their_hash = src_hash;
+        // see if you can find their name from announce data
+        const set<AnnounceData>* ad_set = getAnnounceData();
+        for(const AnnounceData &ad: *ad_set) {
+            if(ad.dest == src_hash) {
+                conv.info.their_name = ad.displayName();
+                break;
+            }
+        }
+
     }
 
 }

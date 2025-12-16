@@ -83,7 +83,6 @@ public:
     void publishEvent(const Event& e);
 
     // run the functor after ms milliseconds
-    // THis function takes control of the functor and will delete the ptr after it's run
     void run_later(std::function<void()> func, uint32_t ms);
 
     

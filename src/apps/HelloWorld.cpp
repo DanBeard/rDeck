@@ -15,7 +15,7 @@
 
 }
 
-/*virtual */ void HelloWorld::tick(const time_t tickMillis) {
+/*virtual */ void HelloWorld::tick(const unsigned long tickMillis) {
     
 }
 

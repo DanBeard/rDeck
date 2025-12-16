@@ -27,7 +27,7 @@
 
 }
 
-/*virtual */ void ClockApp::tick(const time_t tickMillis) {
+/*virtual */ void ClockApp::tick(const unsigned long tickMillis) {
     updateTime();
 }
 

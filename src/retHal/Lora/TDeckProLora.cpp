@@ -188,6 +188,7 @@ bool TDeckProLora::startLora(const LoraConfig &new_config) {
     
     // delete any currently running tasks
     if(loraTaskRunning) {
+        Serial.println("Resetting Lora");
         vTaskDelete(loraTaskHandle);
         loraTaskRunning = false;
         delay(100);
@@ -200,6 +201,8 @@ bool TDeckProLora::startLora(const LoraConfig &new_config) {
     BaseType_t xReturned = xTaskCreatePinnedToCore(loraTask, "LoraTask", 10000, this, 15, &loraTaskHandle, 0);
     if( xReturned == pdPASS ) {
         loraTaskRunning = true;
+         Serial.println("Starting Lora");
+         Serial.println(new_config.bandwidth);
         return false; //it's allll good if we got here
     } 
 

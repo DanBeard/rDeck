@@ -10,7 +10,7 @@ class ClockApp : public BaseApp {
         static const long update_every_sec = 10;
 
         virtual void start(RetOS* retos) override;
-        virtual void tick(const time_t tickMillis) override;
+        virtual void tick(const unsigned long tickMillis) override;
         virtual void stop() override;
 
         void updateTime();
