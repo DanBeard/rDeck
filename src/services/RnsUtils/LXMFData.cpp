@@ -1,13 +1,41 @@
 #include "LXMFData.h"
 #include "retOS/retOS.h"
 
+#ifdef RET_PLATFORM_EMU
+#include <mutex>
+static std::recursive_mutex lxmf_mutex;
+#define LXMF_LOCK() lxmf_mutex.lock()
+#define LXMF_UNLOCK() lxmf_mutex.unlock()
+static void ensureMutex() {} // No-op for std::recursive_mutex
+#else
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+static SemaphoreHandle_t lxmf_mutex = nullptr;
+#define LXMF_LOCK() LXMF_LOCK()
+#define LXMF_UNLOCK() LXMF_UNLOCK()
+static void ensureMutex() {
+    if (lxmf_mutex == nullptr) {
+        lxmf_mutex = xSemaphoreCreateRecursiveMutex();
+    }
+}
+#endif
+
 using namespace Retcon::LXMF;
+
+// Helper to handle ArduinoJson returning "null" for null values
+static string safeGetString(JsonVariant var) {
+    if(var.isNull()) return "";
+    return var.as<string>();
+}
 
 static set<AnnounceData> lxmf_data;
 static boolean loaded = false;
 
 #define LXMF_ANNOUNCE_DATA_FILE_PATH "/lxmf/lxmf_announce_data.bin"
 #define LXMF_CONVERSATION_FOLDER "/lxmf/conversations/"
+
+// Forward declaration
+static void getAllConversationInfo_nolock();
 
 
 AnnounceData::AnnounceData(JsonArray &array) {
@@ -47,15 +75,15 @@ Retcon::LXMF::Message::Message(RNS::Bytes src, RNS::Bytes dest, string title, st
 }
 
 Retcon::LXMF::Message::Message(JsonArray array) {
-    // only unpkaced bits are stored
+    // only unpacked bits are stored
     MsgPackBinary srcb = array[0].as<MsgPackBinary>();
-    dest.assign((uint8_t*)srcb.data(), srcb.size());
+    src.assign((uint8_t*)srcb.data(), srcb.size());
 
     MsgPackBinary destb = array[1].as<MsgPackBinary>();
     dest.assign((uint8_t*)destb.data(), destb.size());
 
-    title = array[2].as<string>();
-    content = array[3].as<string>();
+    title = safeGetString(array[2]);
+    content = safeGetString(array[3]);
     status = (STATUS) array[4].as<uint8_t>();
 } 
 
@@ -130,10 +158,13 @@ RNS::Bytes Retcon::LXMF::Message::fullMsg() const {
 }
 
 const set<AnnounceData>* Retcon::LXMF::getAnnounceData() {
+    ensureMutex();
+    LXMF_LOCK();
+
     if(!loaded)  {
         FS* fs = retOsGlobalPtr->hal().fs;
         if(fs->exists(LXMF_ANNOUNCE_DATA_FILE_PATH)) {
-            JsonDocument doc; 
+            JsonDocument doc;
             File dataFile = fs->open(LXMF_ANNOUNCE_DATA_FILE_PATH);
             DeserializationError error = deserializeMsgPack(doc, dataFile);
             // TODO version check
@@ -144,28 +175,54 @@ const set<AnnounceData>* Retcon::LXMF::getAnnounceData() {
                     lxmf_data.insert(AnnounceData(msgArray));
                 }
             }
-                
+
             doc.clear();
             dataFile.close();
         }
         loaded = true;
     }
-    
+
+    LXMF_UNLOCK();
     return &lxmf_data;
 }
 
 void Retcon::LXMF::addAnnounceData(AnnounceData &a) {
-    // make sure we're loaded
-    getAnnounceData();
+    ensureMutex();
+    LXMF_LOCK();
+
+    // make sure we're loaded (but don't recurse - inline the check)
+    if(!loaded) {
+        FS* fs = retOsGlobalPtr->hal().fs;
+        if(fs->exists(LXMF_ANNOUNCE_DATA_FILE_PATH)) {
+            JsonDocument doc;
+            File dataFile = fs->open(LXMF_ANNOUNCE_DATA_FILE_PATH);
+            DeserializationError error = deserializeMsgPack(doc, dataFile);
+            if(error == DeserializationError::Code::Ok) {
+                JsonArray data = doc["messages"];
+                for(int i=0; i< data.size() && i< NUM_ANNOUNCES; i++) {
+                    JsonArray msgArray = data[i].as<JsonArray>();
+                    lxmf_data.insert(AnnounceData(msgArray));
+                }
+            }
+            doc.clear();
+            dataFile.close();
+        }
+        loaded = true;
+    }
+
     // trim to size
     while(lxmf_data.size() > NUM_ANNOUNCES - 1) {
         lxmf_data.erase(std::prev(lxmf_data.end()));
     }
 
     lxmf_data.insert(a);
+
+    LXMF_UNLOCK();
 }
 
 void Retcon::LXMF::persistAnnounceData(){
+    ensureMutex();
+    LXMF_LOCK();
 
     Serial.print("persisting ");
     Serial.print(lxmf_data.size());
@@ -193,6 +250,8 @@ void Retcon::LXMF::persistAnnounceData(){
      serializeMsgPack(doc, dataFile);
      dataFile.close();
      doc.clear();
+
+     LXMF_UNLOCK();
 }
 
 static Conversation current_conv;
@@ -212,7 +271,7 @@ static void load_converstion(const RNS::Bytes &src_hash, Conversation &conv) {
 
     if(fs->exists(path.data())) {
         JsonDocument doc;
-        
+
         File f = fs->open(path.data(), "r");
         deserializeMsgPack(doc, f);
         f.close();
@@ -221,7 +280,10 @@ static void load_converstion(const RNS::Bytes &src_hash, Conversation &conv) {
         doc.clear();
     } else {
         conv.info.their_hash = src_hash;
-        // see if you can find their name from announce data
+    }
+
+    // ALWAYS try to refresh name from announce data if empty
+    if(conv.info.their_name.empty()) {
         const set<AnnounceData>* ad_set = getAnnounceData();
         for(const AnnounceData &ad: *ad_set) {
             if(ad.dest == src_hash) {
@@ -229,9 +291,7 @@ static void load_converstion(const RNS::Bytes &src_hash, Conversation &conv) {
                 break;
             }
         }
-
     }
-
 }
 
 void persistConversation(Conversation &conv) {
@@ -251,30 +311,43 @@ void persistConversation(Conversation &conv) {
 }
 
 Conversation* Retcon::LXMF::loadAsCurrentConversation(const RNS::Bytes &src_hash) {
-    getAllConversationInfo();
+    ensureMutex();
+    LXMF_LOCK();
+
+    getAllConversationInfo_nolock();
     load_converstion(src_hash, current_conv);
     // make sure current conv is in the list
     conversations_set.insert(current_conv.info);
+
+    LXMF_UNLOCK();
     return &current_conv;
 }
 
 void Retcon::LXMF::persistCurrentConversation() {
+    ensureMutex();
+    LXMF_LOCK();
     persistConversation(current_conv);
+    LXMF_UNLOCK();
 }
 
-void Retcon::LXMF::addMessageToConversation(const Message &msg) {
+void Retcon::LXMF::addMessageToConversation(const Message &msg, const RNS::Bytes &their_hash) {
+    ensureMutex();
+    LXMF_LOCK();
 
-    if(msg.src == current_conv.info.their_hash) {
+    if(their_hash == current_conv.info.their_hash) {
         current_conv.addMessage(msg);
+        persistConversation(current_conv);
     } else {
         // ouch -- gotta load the whole thing to persist a single new message
-        load_converstion(msg.src, temp_conv);
+        load_converstion(their_hash, temp_conv);
         temp_conv.addMessage(msg);
         persistConversation(temp_conv);
         // make sure it's in the meta list
         conversations_set.insert(temp_conv.info);
         temp_conv.clear();
-    }   
+    }
+
+    LXMF_UNLOCK();
 }
 
 void Conversation::addMessage(const Message &msg) {
@@ -282,6 +355,8 @@ void Conversation::addMessage(const Message &msg) {
         msgs.pop_front();
     }
     msgs.push_back(msg);
+    // Update timestamp from message or current time
+    info.last_message_at = msg.timestamp > 0 ? msg.timestamp : time(nullptr);
 }
 
 const std::list<Message>& Conversation::getMessages() const {
@@ -302,15 +377,15 @@ void ConversationMetaInfo::clear() {
 void ConversationMetaInfo::serialize(JsonObject &obj) {
     obj["their_hash"] = MsgPackBinary(their_hash.data(), their_hash.size());
     obj["their_name"] = their_name;
-
+    obj["last_message_at"] = (long)last_message_at;
 }
 
 void ConversationMetaInfo::deserialize(JsonObject &obj) {
     MsgPackBinary thb = obj["their_hash"].as<MsgPackBinary>();
     their_hash.assign((uint8_t*)thb.data(), thb.size());
 
-    their_name = obj["their_name"].as<string>();
-
+    their_name = safeGetString(obj["their_name"]);
+    last_message_at = obj["last_message_at"].as<long>();
 }
 
 void Conversation::serialize(JsonDocument &doc) {
@@ -339,15 +414,16 @@ void Conversation::deserialize(JsonDocument &doc) {
 
 
 
-set<ConversationMetaInfo>* Retcon::LXMF::getAllConversationInfo() {
-    if(conversations_set.size() > 0) return &conversations_set;
+// Internal version without lock - call only when already holding mutex
+static void getAllConversationInfo_nolock() {
+    if(conversations_set.size() > 0) return;
 
     FS* fs = retOsGlobalPtr->hal().fs;
     string path = LXMF_CONVERSATION_FOLDER  "message_set.bin";
 
     if(fs->exists(path.data())) {
         JsonDocument doc;
-        
+
         File f = fs->open(path.data(), "r");
         deserializeMsgPack(doc, f);
         f.close();
@@ -361,11 +437,22 @@ set<ConversationMetaInfo>* Retcon::LXMF::getAllConversationInfo() {
 
         doc.clear();
     }
+}
 
+set<ConversationMetaInfo>* Retcon::LXMF::getAllConversationInfo() {
+    ensureMutex();
+    LXMF_LOCK();
+
+    getAllConversationInfo_nolock();
+
+    LXMF_UNLOCK();
     return &conversations_set;
 }
 
 void Retcon::LXMF::persistAllConversationInfo(){
+    ensureMutex();
+    LXMF_LOCK();
+
     if(conversations_set.size() > 0) {
         FS* fs = retOsGlobalPtr->hal().fs;
         string path = LXMF_CONVERSATION_FOLDER  "message_set.bin";
@@ -383,4 +470,6 @@ void Retcon::LXMF::persistAllConversationInfo(){
         f.close();
         doc.clear();
     }
+
+    LXMF_UNLOCK();
 }

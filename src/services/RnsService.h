@@ -3,6 +3,7 @@
 
 #include <queue>
 #include <map>
+#include "retOS/PlatformMutex.h"
 #include "Reticulum.h"
 #include "Identity.h"
 #include "Destination.h"
@@ -47,7 +48,7 @@ public:
     // send an LXmfMesssage. Pass in an updater function that wi;; be called when status changes with the message object
     typedef function<void(const shared_ptr<Retcon::LXMF::Message>&)> msg_update_cb;
 
-    shared_ptr<Retcon::LXMF::Message>& sendLxmfMsg(const RNS::Bytes dest, const string &title, const string &contents);
+    shared_ptr<Retcon::LXMF::Message> sendLxmfMsg(const RNS::Bytes dest, const string &title, const string &contents);
     const queue<shared_ptr<Retcon::LXMF::Message>>& queuedMsgs() const;
 
     static constexpr const char* settingsSection = "reticulum";
@@ -73,6 +74,9 @@ protected:
     RNS::FileSystem rns_fs;
 
     std::shared_ptr<RDeckAnnounceHandler> _announce_handler;
+
+    // Mutex to protect message state accessed from multiple tasks
+    PlatformMutex _msg_mutex;
 
     boolean _sending_message = false;
     shared_ptr<Retcon::LXMF::Message> _current_sending_msg;

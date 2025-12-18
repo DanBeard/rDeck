@@ -1,95 +1,85 @@
 #ifdef RET_PLATFORM_EMU
-#include <Arduino.h>
 
-#include <TouchDrvCSTXXX.hpp>
+#include <thread>
+#include <chrono>
+#include <atomic>
+#include <cstdio>
+#include <SDL2/SDL.h>
 
-#include "TDeckPro.h"
-#include "retHal/Screen/TDeckProScreen.h"
-#include "retHal/Keyboard/TDeckProKeyboard.h"
-#include <SD.h>
-#include "retHal/Battery/TDeckProBattery.h"
-#include "retHal/GPS/TDeckProGPS.h"
-#include "retHal/Lora/TDeckProLora.h"
+#include "Emulator.h"
+#include "retHal/Screen/EmulatorScreen.h"
+#include "retHal/Keyboard/EmulatorKeyboard.h"
+#include "retHal/Battery/EmulatorBattery.h"
+#include "retHal/GPS/EmulatorGPS.h"
+#include "retHal/Lora/EmulatorLora.h"
 
-TDeckProScreen screen;
-TDeckProKeyboard kb;
-TDeckProBattery bat;
-TDeckProGPS gps;
-TDeckProLora lora;
+// HAL component instances
+static EmulatorScreen screen;
+static EmulatorKeyboard kb;
+static EmulatorBattery bat;
+static EmulatorGPS gps;
+static EmulatorLora lora;
 
-TaskHandle_t uiTask;
-TaskHandle_t servicesTask;
+// Thread handles
+static std::thread* servicesThread = nullptr;
+static std::atomic<bool> running{true};
 
+// Time tracking
+static std::atomic<uint64_t> time_of_last_action{0};
 
-void register_ui_task(RetTask task) {
-   xTaskCreatePinnedToCore(task, "UITask", 10000, NULL, 1, &uiTask, 1);
-}
-
-void register_service_task(RetTask task) {
-    xTaskCreatePinnedToCore(task, "ServiceTask", 10000, NULL, 2, &servicesTask, 1);
-}
-
-uint64_t time_of_last_action = 0;
 uint64_t time_of_last_action_getter() {
-    return time_of_last_action;
+    return time_of_last_action.load();
 }
 
-const gpio_num_t buttonPin1 = GPIO_NUM_0; // GPIO for pushbutton 1
-const gpio_num_t buttonPin2 = GPIO_NUM_27; // GPIO for pushbutton 2
-
-int wakeup_gpio; // Variable to store the GPIO that caused wake-up
-
-// ISR for buttonPin1
-void IRAM_ATTR handleInterrupt1() {
-    wakeup_gpio = buttonPin1;
+void update_last_action_time() {
+    time_of_last_action.store(SDL_GetTicks());
 }
 
-// ISR for buttonPin2
-void IRAM_ATTR handleInterrupt2() {
-    wakeup_gpio = buttonPin2;
+// UI task runs on main thread (required for SDL)
+void register_ui_task(RetTask task) {
+    printf("[Emulator] Starting UI task on main thread\n");
+    // UI task is run directly - caller handles the loop
+    task(nullptr);
 }
 
+// Services task runs on separate thread
+void register_service_task(RetTask task) {
+    printf("[Emulator] Starting services task on background thread\n");
+    servicesThread = new std::thread([task]() {
+        task(nullptr);
+    });
+    servicesThread->detach();
+}
 
+// Light sleep - just delay for emulator
 void light_sleep() {
-    Serial.println("Going to sleep.");
-    //touchSleepWakeUpEnable(BOARD_TOUCH_RST, 100);
-    //gpio_num_t pwr_key = GPIO_NUM_1;
-    //gpio_wakeup_enable(buttonPin1, GPIO_INTR_HIGH_LEVEL); // Trigger wake-up on high level
-    //gpio_wakeup_enable(buttonPin2, GPIO_INTR_HIGH_LEVEL); // Trigger wake-up on high level
-    // Enable wake-up by timer
-    const uint64_t sleepTime = 1000000*5;  // Sleep duration in microseconds (5 seconds)
-    esp_err_t result = esp_sleep_enable_timer_wakeup(sleepTime);
-
-    if (result == ESP_OK) {
-        Serial.println("Timer Wake-Up set successfully as wake-up source.");
-    } else {
-        Serial.println("Failed to set Timer Wake-Up as wake-up source.");
-    }
-    delay(1);
-    esp_light_sleep_start();
-    Serial.println("Woke from sleep!");
-    //Serial.println(wakeup_gpio);
-    //Serial.println("^^^^^^");
+    printf("[Emulator] Light sleep (5 second delay)\n");
+    std::this_thread::sleep_for(std::chrono::seconds(5));
+    printf("[Emulator] Woke from sleep\n");
 }
 
-
-RetHal tDeckProHal = {
+// The HAL struct - note: using emuHal not tDeckProHal!
+RetHal emuHal = {
     .screen = &screen,
-    .fs     = nullptr,
-    .keyboard = nullptr,
-    .battery = nullptr,
-    .gps = nullptr,
-    .lora = nullptr,
-
-    .register_ui_task = (register_ui_task),
-    .register_service_task = (register_service_task), 
-    .time_of_last_action = (time_of_last_action_getter),
-    .light_sleep = (light_sleep),
+    .fs = nullptr,  // Filesystem handled separately for emulator
+    .keyboard = &kb,
+    .battery = &bat,
+    .gps = &gps,
+    .lora = &lora,
+    .register_ui_task = register_ui_task,
+    .register_service_task = register_service_task,
+    .time_of_last_action = time_of_last_action_getter,
+    .light_sleep = light_sleep,
 };
 
+void emuBoardInit() {
+    printf("[Emulator] Initializing emulator board\n");
 
+    // SDL is initialized by EmulatorScreen::initScreen()
+    // Other components are initialized by their respective init methods
 
-void tDeckBoardInit() {
-
+    // Set initial last action time
+    time_of_last_action.store(SDL_GetTicks());
 }
+
 #endif

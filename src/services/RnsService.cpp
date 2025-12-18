@@ -22,16 +22,29 @@ RnsService::RnsService(uint8_t id): reticulum({RNS::Type::NONE}),
 }
 
 static void onLinkPacket(const RNS::Bytes& plaintext, const RNS::Packet& packet) {
-    //rnsService->lxmf_delivery_src.s
+    Serial.print("[LXMF] Received plaintext size: ");
+    Serial.println(plaintext.size());
+
     shared_ptr<Retcon::LXMF::Message> lxmf_msg = make_shared<Retcon::LXMF::Message>(plaintext);
-    Retcon::LXMF::addMessageToConversation(*lxmf_msg);
+
+    Serial.print("[LXMF] dest: "); Serial.println(lxmf_msg->dest.toHex().c_str());
+    Serial.print("[LXMF] src: "); Serial.println(lxmf_msg->src.toHex().c_str());
+    Serial.print("[LXMF] packed_payload size: "); Serial.println(lxmf_msg->packed_payload.size());
+
+    lxmf_msg->unpack();  // Extract title/content from packed_payload
+
+    Serial.print("[LXMF] title: '"); Serial.print(lxmf_msg->title.c_str()); Serial.println("'");
+    Serial.print("[LXMF] content: '"); Serial.print(lxmf_msg->content.c_str()); Serial.println("'");
+
+    // For received messages, src is the sender (them)
+    Retcon::LXMF::addMessageToConversation(*lxmf_msg, lxmf_msg->src);
 
     // send new message event
     Event e;
     e.src = rnsService;
     e.type = NEW_MESSAGE;
     e.data = lxmf_msg;
-    
+
     retOsGlobalPtr->publishEvent(e);
 
 }
@@ -43,6 +56,8 @@ static void onLink(RNS::Link& link) {
 
 void RnsService::start(RetOS* retos){
     updateIcon(false);
+
+    // PlatformMutex creates mutex in constructor, no explicit init needed
 
     // pause and then load config
     RetHal hal = retos->hal();
@@ -236,9 +251,11 @@ void RnsService::sendMessageUpdateEvent(shared_ptr<Retcon::LXMF::Message> &msg) 
     _retos->publishEvent(e);
 }
 
-shared_ptr<Retcon::LXMF::Message>& RnsService::sendLxmfMsg(const RNS::Bytes dest, const string &title, const string &contents) {
+shared_ptr<Retcon::LXMF::Message> RnsService::sendLxmfMsg(const RNS::Bytes dest, const string &title, const string &contents) {
     shared_ptr<Retcon::LXMF::Message> msg = make_shared<Retcon::LXMF::Message>(lxmf_delivery_src.hash(), dest, title, contents);
     msg->status = Retcon::LXMF::Message::STATUS::QUEUEING;
+
+    _msg_mutex.lock();
 
     Serial.println("SENDING LXMF MESSAGE");
     // if nothings going on, then just send it!
@@ -247,6 +264,7 @@ shared_ptr<Retcon::LXMF::Message>& RnsService::sendLxmfMsg(const RNS::Bytes dest
         transmitMsg(msg);
     } else if(_send_msg_queue.size() > max_number_queued_msgs) {
         Serial.println("DROPPING LXMF MESSAGE");
+        _msg_mutex.unlock();
         return msg; // drop it
     } else {
         Serial.println("QUEUEING LXMF MESSAGE");
@@ -257,6 +275,7 @@ shared_ptr<Retcon::LXMF::Message>& RnsService::sendLxmfMsg(const RNS::Bytes dest
         _send_msg_queue.pop();
     }
 
+    _msg_mutex.unlock();
     return msg;
 }
 
@@ -265,26 +284,36 @@ const queue<shared_ptr<Retcon::LXMF::Message>>& RnsService::queuedMsgs() const {
 }
 
 void transmit_delivery_cb(const RNS::PacketReceipt &receipt) {
+    rnsService->_msg_mutex.lock();
+
     rnsService->_sending_message = false;
     delete rnsService->_sending_packet;
     rnsService->_current_sending_msg->status = Retcon::LXMF::Message::STATUS::SENT;
-    Retcon::LXMF::addMessageToConversation(*(rnsService->_current_sending_msg));
+    // For sent messages, dest is the recipient (them)
+    Retcon::LXMF::addMessageToConversation(*(rnsService->_current_sending_msg), rnsService->_current_sending_msg->dest);
+    rnsService->sendMessageUpdateEvent(rnsService->_current_sending_msg);
 
     if(rnsService->_send_msg_queue.size() > 0) {
         rnsService->transmitMsg(rnsService->_send_msg_queue.front());
         rnsService->_send_msg_queue.pop();
     }
 
+    rnsService->_msg_mutex.unlock();
 }
 void transmit_timeout_cb(const RNS::PacketReceipt &receipt) {
+    rnsService->_msg_mutex.lock();
+
     rnsService->_current_sending_msg->status = Retcon::LXMF::Message::STATUS::RETRY;
-    
+    rnsService->sendMessageUpdateEvent(rnsService->_current_sending_msg);
+
     if(rnsService->_num_retries++ > RnsService::max_number_retries) {
         delete rnsService->_sending_packet;
         rnsService->_sending_message = false;
         rnsService->_current_sending_msg->status = Retcon::LXMF::Message::STATUS::FAILED;
-        Retcon::LXMF::addMessageToConversation(*(rnsService->_current_sending_msg));
-        
+        // For sent messages, dest is the recipient (them)
+        Retcon::LXMF::addMessageToConversation(*(rnsService->_current_sending_msg), rnsService->_current_sending_msg->dest);
+        rnsService->sendMessageUpdateEvent(rnsService->_current_sending_msg);
+
         if(rnsService->_send_msg_queue.size() > 0) {
             rnsService->transmitMsg(rnsService->_send_msg_queue.front());
             rnsService->_send_msg_queue.pop();
@@ -292,7 +321,8 @@ void transmit_timeout_cb(const RNS::PacketReceipt &receipt) {
     } else {
         rnsService->transmitMsg(rnsService->_current_sending_msg);
     }
-    
+
+    rnsService->_msg_mutex.unlock();
 }
 void RnsService::transmitMsg(shared_ptr<Retcon::LXMF::Message>& msg) {
     if(_sending_message && msg != _current_sending_msg) return;
@@ -301,13 +331,26 @@ void RnsService::transmitMsg(shared_ptr<Retcon::LXMF::Message>& msg) {
 
     // find the dest destination and pack the msg
     RNS::Identity their_ident = RNS::Identity::recall(msg->dest);
+    if (!their_ident) {
+        // No known identity for this destination - can't send without announce
+        Serial.println("[RNS] ERROR: No known identity for destination, cannot send");
+        msg->status = Retcon::LXMF::Message::STATUS::UNKNOWN_DEST;
+        _sending_message = false;
+        sendMessageUpdateEvent(msg);
+        // Try next message in queue if any
+        if(_send_msg_queue.size() > 0) {
+            transmitMsg(_send_msg_queue.front());
+            _send_msg_queue.pop();
+        }
+        return;
+    }
     RNS::Destination their_dest(their_ident, RNS::Type::Destination::OUT,RNS::Type::Destination::SINGLE, "lxmf",  "delivery");
     msg->pack(lxmf_delivery_src,their_dest);
 
     _current_sending_msg = msg;
     _current_sending_msg->status = Retcon::LXMF::Message::STATUS::SENDING;
     RNS::Bytes fullMsg = _current_sending_msg->fullMsg();
-    _sending_packet = new RNS::Packet(lxmf_delivery_src, fullMsg);
+    _sending_packet = new RNS::Packet(their_dest, fullMsg);
     _sending_packet->send();
     RNS::PacketReceipt receipt = _sending_packet->receipt();
     receipt.set_timeout(packet_timeout_secs);

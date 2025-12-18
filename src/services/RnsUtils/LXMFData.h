@@ -4,6 +4,10 @@
 #include <set>
 #include "Reticulum.h"
 
+#ifdef RET_PLATFORM_EMU
+#include <Arduino.h>
+#endif
+
 // data classes and serialization/deserialization helper for LXMF data
 
 // up this every time you change a schema. It means we wipe the data but avoid corruption
@@ -177,7 +181,8 @@ namespace Retcon::LXMF {
     // only one conversation at a time
     Conversation* loadAsCurrentConversation(const RNS::Bytes &src_hash);
     void persistCurrentConversation();
-    void addMessageToConversation(const Message &msg);
+    // their_hash is the other party in the conversation (sender for received, recipient for sent)
+    void addMessageToConversation(const Message &msg, const RNS::Bytes &their_hash);
 }
 
 
