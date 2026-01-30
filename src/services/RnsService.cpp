@@ -51,7 +51,7 @@ static void onLinkPacket(const RNS::Bytes& plaintext, const RNS::Packet& packet)
 static void onLink(RNS::Link& link) {
     rnsService->reticulum.should_persist_data();
     Serial.println("LINK ESTABLISHED!");
-    link.set_link_packet_callback(onLinkPacket);
+    link.set_packet_callback(onLinkPacket);
 }
 
 void RnsService::start(RetOS* retos){
@@ -270,7 +270,7 @@ shared_ptr<Retcon::LXMF::Message> RnsService::sendLxmfMsg(const RNS::Bytes dest,
         Serial.println("QUEUEING LXMF MESSAGE");
         _send_msg_queue.push(msg);
     }
-    if(!_sending_message) {
+    if(!_sending_message && _send_msg_queue.size() > 0) {
         transmitMsg(_send_msg_queue.front());
         _send_msg_queue.pop();
     }

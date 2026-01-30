@@ -8,6 +8,14 @@
 #define ARDUINO 100  // Fake Arduino version for compatibility checks
 #endif
 
+// Arduino print format constants
+#ifndef DEC
+#define DEC 10
+#define HEX 16
+#define OCT 8
+#define BIN 2
+#endif
+
 // Include C++ headers only when compiling C++
 #ifdef __cplusplus
 // Include chrono and mutex FIRST, before any "using namespace std;" pollutes things

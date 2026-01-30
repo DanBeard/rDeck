@@ -11,8 +11,8 @@ static void ensureMutex() {} // No-op for std::recursive_mutex
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 static SemaphoreHandle_t lxmf_mutex = nullptr;
-#define LXMF_LOCK() LXMF_LOCK()
-#define LXMF_UNLOCK() LXMF_UNLOCK()
+#define LXMF_LOCK() xSemaphoreTakeRecursive(lxmf_mutex, portMAX_DELAY)
+#define LXMF_UNLOCK() xSemaphoreGiveRecursive(lxmf_mutex)
 static void ensureMutex() {
     if (lxmf_mutex == nullptr) {
         lxmf_mutex = xSemaphoreCreateRecursiveMutex();

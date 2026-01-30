@@ -113,7 +113,7 @@ static uint8_t next_header_id() {
             }
            
 		}
-		InterfaceImpl::send_outgoing(data);
+		handle_outgoing(data);
 	}
 	catch (std::exception& e) {
 		ERROR("Could not transmit on " + toString() + ". The contained exception was: " + e.what());
