@@ -37,6 +37,28 @@ static void onLinkPacket(const RNS::Bytes& plaintext, const RNS::Packet& packet)
     Serial.print("[LXMF] src: "); Serial.println(lxmf_msg->src.toHex().c_str());
     Serial.print("[LXMF] packed_payload size: "); Serial.println(lxmf_msg->packed_payload.size());
 
+    // Unpack the LXMF payload to check for service messages
+    JsonDocument payloadDoc;
+    deserializeMsgPack(payloadDoc, lxmf_msg->packed_payload.data(), lxmf_msg->packed_payload.size());
+
+    // LXMF payload format: [timestamp, title, content, fields]
+    // Check if fields contains service message markers
+    if (payloadDoc.is<JsonArray>() && payloadDoc.size() >= 4) {
+        JsonVariant fieldsVar = payloadDoc[3];
+        if (!fieldsVar.isNull() && fieldsVar.is<JsonObject>()) {
+            JsonDocument fields;
+            fields.set(fieldsVar);
+
+            if (Retcon::Service::ServiceMessage::isServiceMessage(fields)) {
+                Serial.println("[LXMF] Detected service message in fields");
+                Retcon::Service::ServiceMessage svcMsg = Retcon::Service::ServiceMessage::fromFields(fields);
+                rnsService->handleServiceMessage(svcMsg, lxmf_msg->src);
+                return;  // Don't process as regular LXMF message
+            }
+        }
+    }
+
+    // Regular LXMF message handling
     lxmf_msg->unpack();  // Extract title/content from packed_payload
 
     Serial.print("[LXMF] title: '"); Serial.print(lxmf_msg->title.c_str()); Serial.println("'");
@@ -196,13 +218,16 @@ void RnsService::start(RetOS* retos){
 	// 	HEAD("Registering announce handler with Transport...", RNS::LOG_TRACE);
 		//RNS::Transport::register_announce_handler(announce_handler);
 
+    // Initialize trusted servers storage
+    Retcon::Service::getTrustedServers().init(_fs);
+
     // set to running
     _status = RUNNING;
     retos->run_later([this]() {
         Serial.println("RNS ANNOUNCE INITIAL");
         announce();
     }, 1500);
-   
+
 }
 
 void RnsService::saveUserInfo() {
@@ -487,7 +512,7 @@ void RnsService::mergeLoraSettings(LoraConfig& config) {
     JsonObject loraSettings = _settings["lora"];
 
     serializeJsonPretty(loraSettings, Serial);
-    
+
     // copy over any settings changes
     if(loraSettings.containsKey("fr")) {
         config.frequency = loraSettings["fr"];
@@ -501,4 +526,229 @@ void RnsService::mergeLoraSettings(LoraConfig& config) {
     if(loraSettings.containsKey("cr")) {
         config.cr = loraSettings["cr"];
     }
+}
+
+// ============================================================================
+// Service Protocol Methods
+// ============================================================================
+
+void RnsService::sendServiceMessage(const RNS::Bytes& dest, const Retcon::Service::ServiceMessage& msg) {
+    // Find the destination identity
+    RNS::Identity their_ident = RNS::Identity::recall(dest);
+    if (!their_ident) {
+        Serial.println("[Service] ERROR: No known identity for destination");
+        return;
+    }
+
+    // Build the LXMF message with service fields
+    // We encode the service message into the LXMF fields
+    JsonDocument fields;
+    msg.toFields(fields);
+
+    // Pack into LXMF format
+    // For service messages, we use empty title/content and put data in fields
+    time_t timestamp;
+    time(&timestamp);
+
+    JsonDocument payload;
+    payload.add(timestamp);
+    payload.add(MsgPackBinary("", 0));  // empty title
+    payload.add(MsgPackBinary("", 0));  // empty content
+    payload.add(fields);  // service fields
+
+    uint8_t packed_payload[Retcon::LXMF::Message::max_lxmf_payload_size];
+    size_t payload_len = serializeMsgPack(payload, packed_payload, sizeof(packed_payload));
+
+    // Build the full message
+    RNS::Destination their_dest(their_ident, RNS::Type::Destination::OUT, RNS::Type::Destination::SINGLE, "lxmf", "delivery");
+
+    RNS::Bytes hashed_part;
+    hashed_part.append(their_dest.hash());
+    hashed_part.append(lxmf_delivery_src.hash());
+    hashed_part.append(packed_payload, payload_len);
+
+    RNS::Bytes hash = RNS::Identity::full_hash(hashed_part);
+    RNS::Bytes signed_part;
+    signed_part.append(hashed_part);
+    signed_part.append(hash);
+
+    RNS::Bytes signature = lxmf_delivery_src.sign(signed_part);
+
+    // Full LXMF message: dest_hash + src_hash + signature + payload
+    // But for single-packet delivery, we strip dest_hash
+    RNS::Bytes packetData;
+    packetData.append(lxmf_delivery_src.hash());
+    packetData.append(signature);
+    packetData.append(packed_payload, payload_len);
+
+    // Send the packet
+    RNS::Packet packet(their_dest, packetData);
+    packet.send();
+
+    Serial.printf("[Service] Sent message type 0x%02X to %s\n",
+                  static_cast<uint8_t>(msg.msg_type), dest.toHex().substr(0, 12).c_str());
+}
+
+void RnsService::sendTrustAccept(const RNS::Bytes& serverHash) {
+    // Get device name from userInfo
+    const char* name = userInfo["name"];
+
+    Retcon::Service::TrustAcceptPayload payload;
+    payload.device_name = name ? name : "rDeck";
+
+    uint8_t payloadBuf[128];
+    size_t payloadLen = payload.serialize(payloadBuf, sizeof(payloadBuf));
+
+    Retcon::Service::ServiceMessage msg;
+    msg.msg_type = Retcon::Service::MessageType::TRUST_ACCEPT;
+    msg.service = "trust";
+    msg.payload.assign(payloadBuf, payloadLen);
+    msg.request_id = (uint32_t)(millis() & 0xFFFFFFFF);
+
+    sendServiceMessage(serverHash, msg);
+    Serial.printf("[Service] Sent TRUST_ACCEPT to %s\n", serverHash.toHex().substr(0, 12).c_str());
+}
+
+void RnsService::requestNtpSync(const RNS::Bytes& serverHash) {
+    Retcon::Service::NTPRequestPayload payload;
+    payload.client_timestamp = (uint32_t)(millis() & 0xFFFFFFFF);
+
+    uint8_t payloadBuf[64];
+    size_t payloadLen = payload.serialize(payloadBuf, sizeof(payloadBuf));
+
+    Retcon::Service::ServiceMessage msg;
+    msg.msg_type = Retcon::Service::MessageType::NTP_REQUEST;
+    msg.service = "ntp";
+    msg.payload.assign(payloadBuf, payloadLen);
+    msg.request_id = payload.client_timestamp;
+
+    _pending_ntp_request_id = msg.request_id;
+    _last_ntp_request = millis();
+
+    sendServiceMessage(serverHash, msg);
+    Serial.printf("[Service] Sent NTP_REQUEST to %s\n", serverHash.toHex().substr(0, 12).c_str());
+}
+
+void RnsService::requestSearch(const RNS::Bytes& serverHash, const std::string& query) {
+    Retcon::Service::SearchRequestPayload payload;
+    payload.query = query;
+    payload.max_results = 5;
+
+    uint8_t payloadBuf[256];
+    size_t payloadLen = payload.serialize(payloadBuf, sizeof(payloadBuf));
+
+    uint32_t requestId = (uint32_t)(millis() & 0xFFFFFFFF);
+
+    Retcon::Service::ServiceMessage msg;
+    msg.msg_type = Retcon::Service::MessageType::SEARCH_REQUEST;
+    msg.service = "search";
+    msg.payload.assign(payloadBuf, payloadLen);
+    msg.request_id = requestId;
+
+    // Store pending search
+    _pending_searches[requestId] = {query, requestId};
+
+    sendServiceMessage(serverHash, msg);
+    Serial.printf("[Service] Sent SEARCH_REQUEST for '%s'\n", query.c_str());
+}
+
+void RnsService::handleServiceMessage(const Retcon::Service::ServiceMessage& msg, const RNS::Bytes& sourceHash) {
+    Serial.printf("[Service] Handling message type 0x%02X from %s\n",
+                  static_cast<uint8_t>(msg.msg_type), sourceHash.toHex().substr(0, 12).c_str());
+
+    switch (msg.msg_type) {
+        case Retcon::Service::MessageType::TRUST_OFFER: {
+            Retcon::Service::TrustOfferPayload payload;
+            payload.deserialize(msg.payload.data(), msg.payload.size());
+            handleTrustOffer(payload, sourceHash);
+            break;
+        }
+
+        case Retcon::Service::MessageType::NTP_RESPONSE: {
+            // Only accept from trusted servers
+            if (!Retcon::Service::getTrustedServers().isTrusted(sourceHash)) {
+                Serial.println("[Service] Ignoring NTP response from untrusted server");
+                return;
+            }
+            Retcon::Service::NTPResponsePayload payload;
+            payload.deserialize(msg.payload.data(), msg.payload.size());
+            handleNtpResponse(payload);
+            break;
+        }
+
+        case Retcon::Service::MessageType::SEARCH_RESPONSE: {
+            // Only accept from trusted servers
+            if (!Retcon::Service::getTrustedServers().isTrusted(sourceHash)) {
+                Serial.println("[Service] Ignoring search response from untrusted server");
+                return;
+            }
+            Retcon::Service::SearchResponsePayload payload;
+            payload.deserialize(msg.payload.data(), msg.payload.size());
+            handleSearchResponse(payload, msg.request_id);
+            break;
+        }
+
+        default:
+            Serial.printf("[Service] Unknown message type: 0x%02X\n", static_cast<uint8_t>(msg.msg_type));
+            break;
+    }
+}
+
+void RnsService::handleTrustOffer(const Retcon::Service::TrustOfferPayload& payload, const RNS::Bytes& sourceHash) {
+    Serial.printf("[Service] Received TRUST_OFFER from '%s' offering services:", payload.server_name.c_str());
+    for (const auto& svc : payload.services) {
+        Serial.printf(" %s", svc.c_str());
+    }
+    Serial.println();
+
+    // Add to trusted servers as pending
+    Retcon::Service::getTrustedServers().addPendingOffer(sourceHash, payload.server_name, payload.services);
+
+    // Send event so UI can update
+    Event e;
+    e.src = this;
+    e.type = EventType::SETTINGS_CHANGED;  // Reuse existing event type
+    _retos->publishEvent(e);
+}
+
+void RnsService::handleNtpResponse(const Retcon::Service::NTPResponsePayload& payload) {
+    Serial.printf("[Service] Received NTP_RESPONSE: server_time=%u, client_time=%u\n",
+                  payload.server_timestamp, payload.client_timestamp);
+
+    // Calculate RTT if we have a matching request
+    uint32_t now = (uint32_t)(millis() & 0xFFFFFFFF);
+    uint32_t rtt = now - payload.client_timestamp;
+
+    Serial.printf("[Service] RTT: %u ms\n", rtt);
+
+    // Apply time with RTT compensation (assume symmetric latency)
+    time_t adjusted_time = payload.server_timestamp + (rtt / 2000);  // Convert ms to seconds
+
+    // Set time using TimeHelper with RETICULUM_NTP source
+    _retos->time.setTime(adjusted_time, TimeSource::RETICULUM_NTP);
+
+    Serial.printf("[Service] Time synchronized to %lu (adjusted for RTT)\n", adjusted_time);
+}
+
+void RnsService::handleSearchResponse(const Retcon::Service::SearchResponsePayload& payload, uint32_t requestId) {
+    Serial.printf("[Service] Received SEARCH_RESPONSE for '%s': %d results\n",
+                  payload.query.c_str(), payload.results.size());
+
+    if (!payload.error.empty()) {
+        Serial.printf("[Service] Search error: %s\n", payload.error.c_str());
+    }
+
+    // Remove from pending
+    _pending_searches.erase(requestId);
+
+    // Send event with search results
+    Event e;
+    e.src = this;
+    e.type = EventType::SEARCH_RESULTS;
+
+    // Create a shared copy of results for the event
+    auto results = std::make_shared<Retcon::Service::SearchResponsePayload>(payload);
+    e.data = results;
+
+    _retos->publishEvent(e);
 }

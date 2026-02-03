@@ -333,14 +333,40 @@
 
 
 
-void TimeHelper::setTime(time_t epoch_secs) {
+bool TimeHelper::setTime(time_t epoch_secs, TimeSource source) {
+    // Only accept time from equal or higher priority sources
+    if (static_cast<uint8_t>(source) < static_cast<uint8_t>(_currentSource)) {
+        Serial.printf("[Time] Rejected time from %s (current source: %s)\n",
+                      sourceToString(source), sourceToString(_currentSource));
+        return false;
+    }
+
     struct timeval tv = {0};
     tv.tv_sec = epoch_secs;
     tv.tv_usec = 0;
     settimeofday(&tv, NULL);
+
+    _currentSource = source;
+    Serial.printf("[Time] Set time to %lu from %s\n", epoch_secs, sourceToString(source));
+    return true;
 }
 
-void TimeHelper::setPosixTimezone(const char* timezone_str) {\
-  setenv("TZ",timezone_str,1);
-  tzset();
+void TimeHelper::setTime(time_t epoch_secs) {
+    // Backwards compatibility - use MANUAL source
+    setTime(epoch_secs, TimeSource::MANUAL);
+}
+
+void TimeHelper::setPosixTimezone(const char* timezone_str) {
+    setenv("TZ", timezone_str, 1);
+    tzset();
+}
+
+const char* TimeHelper::sourceToString(TimeSource source) {
+    switch (source) {
+        case TimeSource::NONE: return "None";
+        case TimeSource::MANUAL: return "Manual";
+        case TimeSource::RETICULUM_NTP: return "Reticulum NTP";
+        case TimeSource::GPS: return "GPS";
+        default: return "Unknown";
+    }
 }

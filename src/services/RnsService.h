@@ -18,6 +18,8 @@
 #include "RnsUtils/LoraInterface.h"
 #include "RnsUtils/RDeckAnnounceHandler.h"
 #include "RnsUtils/LXMFData.h"
+#include "RnsUtils/ServiceProtocol.h"
+#include "RnsUtils/TrustedServers.h"
 
 
 
@@ -51,11 +53,19 @@ public:
     shared_ptr<Retcon::LXMF::Message> sendLxmfMsg(const RNS::Bytes dest, const string &title, const string &contents);
     const queue<shared_ptr<Retcon::LXMF::Message>>& queuedMsgs() const;
 
+    // Service protocol methods
+    void sendServiceMessage(const RNS::Bytes& dest, const Retcon::Service::ServiceMessage& msg);
+    void sendTrustAccept(const RNS::Bytes& serverHash);
+    void requestNtpSync(const RNS::Bytes& serverHash);
+    void requestSearch(const RNS::Bytes& serverHash, const std::string& query);
+
     static constexpr const char* settingsSection = "reticulum";
     static bool drawSettings(lv_obj_t * column, Settings* settings);
     static void applySettings();
     static void mergeLoraSettings(LoraConfig& config);
-    //functions to get info
+
+    // Service message handling - called from packet callback
+    void handleServiceMessage(const Retcon::Service::ServiceMessage& msg, const RNS::Bytes& sourceHash);
 
 protected:
     void updateIcon(bool status);
@@ -94,6 +104,22 @@ protected:
     volatile bool _needs_send_processing = false;
 
     void sendMessageUpdateEvent(shared_ptr<Retcon::LXMF::Message> &msg);
+
+    void handleTrustOffer(const Retcon::Service::TrustOfferPayload& payload, const RNS::Bytes& sourceHash);
+    void handleNtpResponse(const Retcon::Service::NTPResponsePayload& payload);
+    void handleSearchResponse(const Retcon::Service::SearchResponsePayload& payload, uint32_t requestId);
+
+    // NTP sync state
+    unsigned long _last_ntp_request = 0;
+    uint32_t _pending_ntp_request_id = 0;
+    static const unsigned long NTP_SYNC_INTERVAL = 30 * 60 * 1000;  // 30 minutes
+
+    // Search state
+    struct PendingSearch {
+        std::string query;
+        uint32_t request_id;
+    };
+    std::map<uint32_t, PendingSearch> _pending_searches;
 
     friend void transmit_delivery_cb(const RNS::PacketReceipt &receipt);
     friend void transmit_timeout_cb(const RNS::PacketReceipt &receipt);

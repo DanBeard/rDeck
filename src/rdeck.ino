@@ -9,9 +9,10 @@
 #include "boards/board.h"
 
 forward_list<AppInfo> apps= {
-     AppFactory<ClockApp>("Clock", &img_clock), 
+     AppFactory<ClockApp>("Clock", &img_clock),
      AppFactory<NotesApp>("Notes", &img_notes),
-     AppFactory<UChat>("uChat", &img_chat),  
+     AppFactory<UChat>("uChat", &img_chat),
+     AppFactory<WebSearch>("Search", &img_wifi),
      AppFactory<CleanScreen>("Clean", &img_gear),
      AppFactory<Settings>("Settings", &img_gear)
 };

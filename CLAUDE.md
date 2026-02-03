@@ -6,6 +6,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 rDeck is a custom operating system (RetOS) for the LilyGo T-Deck Pro hardware - an ESP32-S3 based handheld device with e-paper display, keyboard, LoRa radio, and GPS. It implements the Reticulum Network Stack for off-grid mesh communication via LXMF messaging.
 
+### Vision
+
+rDeck aims to be a Reticulum-first off-grid smartphone replacement. The Companion Server system extends its capabilities by providing infrastructure services (NTP, web search) to trusted devices over the mesh network, enabling smartphone-like functionality without internet connectivity on the device itself.
+
 ## Build Commands
 
 ```bash
@@ -47,7 +51,7 @@ pio device monitor
 
 Inherit from `BaseApp`. Single active app at a time. Lifecycle: construct → `startApp()` → `tick()` loop → `stop()` → destroy.
 
-Key apps: Launcher (app grid), UChat (LXMF messaging), Clock, Notes, Settings
+Key apps: Launcher (app grid), UChat (LXMF messaging), Clock, Notes, Settings, WebSearch
 
 Register new apps in `rdeck.ino` using `AppFactory<YourApp>("Name", &icon)`
 
@@ -73,6 +77,36 @@ Register new services in `rdeck.ino` using `ServiceFactory<YourService>()`
 - **Event publishing**: Services call `publishEvent(Event{...})` to notify other components
 
 - **UI drawing**: Apps draw to `screen` (lv_obj_t*), use `_retos->ui()` for theme colors
+
+### Companion Server (`companion-server/`)
+
+A Python-based companion server that provides infrastructure services to rDeck devices over Reticulum:
+
+- **NTP Service**: Time synchronization over mesh
+- **Search Service**: Web search proxy via DuckDuckGo
+- **Trust Management**: Mutual trust workflow for secure service access
+
+See `companion-server/README.md` for setup and usage.
+
+#### Trust Workflow
+
+1. rDeck announces on network
+2. Server user clicks "Trust" in TUI
+3. Server sends TRUST_OFFER message
+4. rDeck user accepts in Settings → Trusted Servers
+5. rDeck sends TRUST_ACCEPT
+6. Services now available
+
+#### Service Protocol
+
+Messages use LXMF fields with msgpack encoding. Key message types:
+
+| Type | Value | Direction | Purpose |
+|------|-------|-----------|---------|
+| TRUST_OFFER | 0x01 | Server→Device | Trust offer |
+| TRUST_ACCEPT | 0x02 | Device→Server | Accept trust |
+| NTP_REQUEST/RESPONSE | 0x10/0x11 | Bidirectional | Time sync |
+| SEARCH_REQUEST/RESPONSE | 0x20/0x21 | Bidirectional | Web search |
 
 ### Dependencies
 

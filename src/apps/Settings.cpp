@@ -1,5 +1,7 @@
 #include "Settings.h"
 #include "retOS/retosUtils/timezones.h"
+#include "services/RnsUtils/TrustedServers.h"
+#include "services/RnsService.h"
 
 static JsonDocument _root_settings;
 
@@ -108,6 +110,9 @@ void Settings::drawScreen() {
 
     drawTimeDateSection();
 
+    // Trusted servers section
+    drawTrustedServersSection();
+
     // draw any section added by services
     for(auto sInfo: _retos->serviceInfo()) {
         sInfo.drawSettings(settings_column, this);
@@ -213,5 +218,137 @@ void Settings::drawTimeDateSection() {
     // lv_obj_center(btn_label);
 
 
-    
+}
+
+// Callback data for trust accept/revoke buttons
+struct TrustButtonData {
+    std::string hashHex;
+    Settings* settings;
+};
+
+static void trustAcceptCallback(lv_event_t* e) {
+    TrustButtonData* data = (TrustButtonData*)lv_event_get_user_data(e);
+    if (data) {
+        Serial.printf("[Settings] Accepting trust for %s\n", data->hashHex.c_str());
+
+        // Accept the trust offer
+        if (Retcon::Service::getTrustedServers().acceptOffer(data->hashHex)) {
+            // Send TRUST_ACCEPT message
+            RNS::Bytes serverHash;
+            serverHash.assignHex(data->hashHex.c_str());
+
+            RnsService* rns = retOsGlobalPtr->fetchService<RnsService>();
+            if (rns) {
+                rns->sendTrustAccept(serverHash);
+            }
+
+            // Redraw the section to show updated state
+            data->settings->redrawTrustedServersSection();
+        }
+    }
+}
+
+static void trustRevokeCallback(lv_event_t* e) {
+    TrustButtonData* data = (TrustButtonData*)lv_event_get_user_data(e);
+    if (data) {
+        Serial.printf("[Settings] Revoking trust for %s\n", data->hashHex.c_str());
+        Retcon::Service::getTrustedServers().revokeTrust(data->hashHex);
+
+        // Redraw the section
+        data->settings->redrawTrustedServersSection();
+    }
+}
+
+void Settings::drawTrustedServersSection() {
+    drawSettingsSectionHeader(settings_column, "Trusted Servers");
+
+    auto& trustedServers = Retcon::Service::getTrustedServers();
+    auto pending = trustedServers.getPendingOffers();
+    auto trusted = trustedServers.getTrustedServers();
+
+    if (pending.empty() && trusted.empty()) {
+        lv_obj_t* emptyLabel = lv_label_create(settings_column);
+        lv_label_set_text(emptyLabel, "No server connections yet.");
+        lv_obj_set_size(emptyLabel, LV_PCT(100), LV_SIZE_CONTENT);
+        lv_obj_add_flag(emptyLabel, LV_OBJ_FLAG_FLEX_IN_NEW_TRACK);
+        lv_obj_set_style_text_color(emptyLabel, lv_color_hex(0x888888), LV_PART_MAIN);
+        return;
+    }
+
+    // Draw pending offers
+    if (!pending.empty()) {
+        lv_obj_t* pendingLabel = lv_label_create(settings_column);
+        lv_label_set_text(pendingLabel, "Pending Offers:");
+        lv_obj_set_size(pendingLabel, LV_PCT(100), LV_SIZE_CONTENT);
+        lv_obj_add_flag(pendingLabel, LV_OBJ_FLAG_FLEX_IN_NEW_TRACK);
+        lv_obj_set_style_pad_top(pendingLabel, 5, LV_PART_MAIN);
+
+        for (const auto& server : pending) {
+            drawTrustedServerRow(server, true);
+        }
+    }
+
+    // Draw trusted servers
+    if (!trusted.empty()) {
+        lv_obj_t* trustedLabel = lv_label_create(settings_column);
+        lv_label_set_text(trustedLabel, "Trusted:");
+        lv_obj_set_size(trustedLabel, LV_PCT(100), LV_SIZE_CONTENT);
+        lv_obj_add_flag(trustedLabel, LV_OBJ_FLAG_FLEX_IN_NEW_TRACK);
+        lv_obj_set_style_pad_top(trustedLabel, 5, LV_PART_MAIN);
+
+        for (const auto& server : trusted) {
+            drawTrustedServerRow(server, false);
+        }
+    }
+}
+
+void Settings::drawTrustedServerRow(const Retcon::Service::TrustedServer& server, bool isPending) {
+    // Name label
+    lv_obj_t* nameLabel = lv_label_create(settings_column);
+    lv_label_set_text(nameLabel, server.name.c_str());
+    lv_obj_set_size(nameLabel, LV_PCT(50), LV_SIZE_CONTENT);
+    lv_obj_add_flag(nameLabel, LV_OBJ_FLAG_FLEX_IN_NEW_TRACK);
+    lv_obj_set_style_pad_top(nameLabel, 3, LV_PART_MAIN);
+
+    // Services label (smaller text)
+    std::string services;
+    for (size_t i = 0; i < server.services.size(); i++) {
+        if (i > 0) services += ", ";
+        services += server.services[i];
+    }
+
+    lv_obj_t* svcLabel = lv_label_create(settings_column);
+    lv_label_set_text(svcLabel, services.c_str());
+    lv_obj_set_size(svcLabel, LV_PCT(25), LV_SIZE_CONTENT);
+    lv_obj_set_style_text_color(svcLabel, lv_color_hex(0x888888), LV_PART_MAIN);
+    lv_obj_set_style_pad_top(svcLabel, 3, LV_PART_MAIN);
+
+    // Button (Accept or Revoke)
+    lv_obj_t* btn = lv_btn_create(settings_column);
+    lv_obj_set_size(btn, LV_PCT(20), LV_SIZE_CONTENT);
+
+    lv_obj_t* btnLabel = lv_label_create(btn);
+    lv_label_set_text(btnLabel, isPending ? "Accept" : "Revoke");
+    lv_obj_center(btnLabel);
+
+    // Store button data - use static storage to persist past function call
+    // This is a simple approach; for many servers we'd want a proper container
+    static std::vector<TrustButtonData> buttonDataStorage;
+    buttonDataStorage.push_back({server.hashHex(), this});
+    TrustButtonData* data = &buttonDataStorage.back();
+
+    if (isPending) {
+        lv_obj_add_event_cb(btn, trustAcceptCallback, LV_EVENT_CLICKED, data);
+        lv_obj_set_style_bg_color(btn, lv_color_hex(0x228B22), LV_PART_MAIN);  // Forest green
+    } else {
+        lv_obj_add_event_cb(btn, trustRevokeCallback, LV_EVENT_CLICKED, data);
+        lv_obj_set_style_bg_color(btn, lv_color_hex(0x8B0000), LV_PART_MAIN);  // Dark red
+    }
+}
+
+void Settings::redrawTrustedServersSection() {
+    // Simple approach: just redraw the entire screen
+    // A more sophisticated approach would track the section container and only redraw that
+    lv_obj_clean(screen);
+    drawScreen();
 }

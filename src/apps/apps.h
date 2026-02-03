@@ -7,3 +7,4 @@
 #include "Settings.h"
 #include "UChat.h"
 #include "CleanScreen.h"
+#include "WebSearch.h"
