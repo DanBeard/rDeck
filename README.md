@@ -4,70 +4,263 @@ A Reticulum-first off-grid smartphone replacement built on the LilyGo T-Deck Pro
 
 ## Vision
 
-rDeck transforms the T-Deck Pro hardware into an off-grid communication device using the Reticulum Network Stack. With a companion server running on an internet-connected machine, rDeck gains smartphone-like capabilities - time synchronization, web search, and more - all delivered over the encrypted mesh network.
+rDeck transforms the T-Deck Pro into a fully functional off-grid communication device. Using the Reticulum Network Stack, it provides encrypted mesh messaging without any internet or cellular infrastructure. When paired with a Companion Server on an internet-connected machine, rDeck gains smartphone-like capabilities—time synchronization, web search, and more—all delivered securely over the mesh network.
+
+**No cell towers. No internet on the device. Just encrypted mesh.**
 
 ## Features
 
-- **Off-grid Messaging**: LXMF messaging over LoRa mesh
-- **Companion Server Integration**: NTP time sync, web search via trusted servers
-- **E-paper Display**: Low power, daylight readable
+### Core Functionality
+- **Off-grid Messaging (UChat)**: End-to-end encrypted LXMF messaging over LoRa
+- **Address Book**: Store and manage contacts with Reticulum addresses
+- **Notes**: Local note-taking with persistence
+- **Clock**: Multiple timezone support with automatic time sync
+
+### Companion Server Integration
+When connected to a trusted Companion Server:
+- **NTP Time Sync**: Accurate time over the mesh network
+- **Web Search**: Search the web via DuckDuckGo proxy
+- **Extensible**: Protocol supports adding new services
+
+### Hardware Features
+- **E-paper Display**: Low power, excellent daylight readability
 - **GPS**: Location tracking and time synchronization
-- **Desktop Emulator**: Develop and test without hardware
+- **LoRa Radio**: Long-range mesh networking (SX1262)
+- **QWERTY Keyboard**: Full text input
+- **Battery Powered**: Portable operation
 
-## Hardware
+### Development
+- **Desktop Emulator**: Full SDL2-based emulator for development without hardware
+- **Unit Tests**: Comprehensive test suites for protocol compatibility
 
-- LilyGo T-Deck Pro
-- ESP32-S3 processor
-- E-paper display (EPD)
-- QWERTY keyboard
-- LoRa radio (SX1262)
-- GPS module
+## Hardware Requirements
+
+- **LilyGo T-Deck Pro** (primary target)
+  - ESP32-S3 processor
+  - 2.13" E-paper display
+  - SX1262 LoRa radio
+  - GPS module
+  - QWERTY keyboard
+  - Battery management
 
 ## Quick Start
+
+### Prerequisites
+
+- [PlatformIO](https://platformio.org/) (CLI or IDE plugin)
+- For emulator: SDL2 development libraries
+  ```bash
+  # Debian/Ubuntu
+  sudo apt install libsdl2-dev
+
+  # macOS
+  brew install sdl2
+  ```
 
 ### Building for Hardware
 
 ```bash
+# Build
 pio run -e T-Deck-Pro
+
+# Upload to device
 pio run -e T-Deck-Pro --target upload
+
+# Monitor serial output
+pio device monitor
 ```
 
-### Building the Emulator
+### Building the Desktop Emulator
 
 ```bash
+# Build
 pio run -e emulator_64bits
+
+# Run
 .pio/build/emulator_64bits/program
 ```
 
 ### Running the Companion Server
 
+The Companion Server provides internet-backed services to rDeck devices over Reticulum.
+
 ```bash
 cd companion-server
+
+# Create virtual environment
+python3 -m venv .venv
+source .venv/bin/activate
+
+# Install
 pip install -e .
+
+# Run
 python -m companion_server
 ```
 
-## Companion Server
+The TUI will display:
+- **Announce Stream**: Devices announcing on the network
+- **Trusted Devices**: Devices you've established trust with
+- **Log Panel**: Service activity and debug information
 
-The companion server runs on an internet-connected machine and provides services to trusted rDeck devices over Reticulum:
+## Trust Workflow
 
-- **NTP Service**: Time synchronization
-- **Search Service**: Web search via DuckDuckGo proxy
+rDeck uses a mutual trust model for security. Both the device and server must explicitly trust each other before services are available.
 
-### Trust Workflow
+```
+┌─────────────────┐                      ┌─────────────────┐
+│ Companion Server│                      │     rDeck       │
+├─────────────────┤                      ├─────────────────┤
+│                 │  1. Sees announce    │                 │
+│  Announce Stream│◄─────────────────────│  Auto-announces │
+│                 │                      │                 │
+│  2. User clicks │                      │                 │
+│     "Trust"     │                      │                 │
+│                 │  3. TRUST_OFFER      │                 │
+│                 │─────────────────────►│  Pending offer  │
+│                 │                      │  appears        │
+│                 │                      │                 │
+│                 │                      │  4. User opens  │
+│                 │                      │  Settings →     │
+│                 │  5. TRUST_ACCEPT     │  Trusted Servers│
+│  Mutual trust   │◄─────────────────────│  → Accept       │
+│  established    │                      │                 │
+│                 │                      │                 │
+│  Services now   │◄────────────────────►│  Services now   │
+│  available      │   NTP, Search, etc.  │  available      │
+└─────────────────┘                      └─────────────────┘
+```
 
-1. rDeck announces itself on the network
-2. In the companion server TUI, click "Trust" on the rDeck's announce
-3. Server sends a trust offer to rDeck
-4. On rDeck, open Settings → Trusted Servers → Accept the offer
-5. Services are now available
+### On the Companion Server:
+1. Launch the TUI (`python -m companion_server`)
+2. Wait for rDeck's announce to appear in the stream
+3. Select the announce and press Enter or click "Trust"
+
+### On rDeck:
+1. Open **Settings** app
+2. Navigate to **Trusted Servers**
+3. Pending offers appear with server name and services
+4. Press **Accept** to establish mutual trust
+
+Once trusted, rDeck will automatically:
+- Sync time via NTP on startup
+- Enable web search in the WebSearch app
 
 ## Architecture
 
-- **RetOS**: Custom OS with app/service lifecycle management
-- **Apps**: Clock, Notes, UChat (messaging), WebSearch, Settings
-- **Services**: RnsService (Reticulum/LXMF), GPSService
+```
+┌─────────────────────────────────────────────────────────────┐
+│                         RetOS                                │
+├──────────────────────────┬──────────────────────────────────┤
+│        UI Task           │         Services Task            │
+├──────────────────────────┼──────────────────────────────────┤
+│  ┌─────────────────┐     │  ┌─────────────────┐             │
+│  │    RetUI        │     │  │   RnsService    │             │
+│  │  (LVGL-based)   │     │  │  (Reticulum +   │             │
+│  └────────┬────────┘     │  │   LXMF + Trust) │             │
+│           │              │  └─────────────────┘             │
+│  ┌────────┴────────┐     │  ┌─────────────────┐             │
+│  │      Apps       │     │  │   GPSService    │             │
+│  │ Launcher, UChat │     │  │  (Location +    │             │
+│  │ Clock, Notes,   │     │  │   Time sync)    │             │
+│  │ Settings,       │     │  └─────────────────┘             │
+│  │ WebSearch       │     │                                  │
+│  └─────────────────┘     │                                  │
+├──────────────────────────┴──────────────────────────────────┤
+│                    Hardware Abstraction                      │
+│    Screen │ Keyboard │ Battery │ GPS │ LoRa │ Filesystem    │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Key Components
+
+| Component | Description |
+|-----------|-------------|
+| **RetOS** | Core OS managing app/service lifecycle and events |
+| **RetUI** | LVGL-based UI with top bar and app screen area |
+| **RnsService** | Reticulum identity, LXMF messaging, trust management |
+| **GPSService** | GPS coordinates and time synchronization |
+| **TrustedServers** | Persistent storage of trusted companion servers |
+| **TimeHelper** | Time source priority (GPS > NTP > Manual) |
+
+## Apps
+
+| App | Description |
+|-----|-------------|
+| **Launcher** | App grid home screen |
+| **UChat** | LXMF encrypted messaging |
+| **Clock** | Time display with timezone support |
+| **Notes** | Local note-taking |
+| **Settings** | System settings, trusted servers management |
+| **WebSearch** | Web search via companion server |
+
+## Development
+
+### Running Tests
+
+```bash
+# Python companion server tests
+cd companion-server
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
+pytest
+
+# C++ unit tests
+pio test -e test_native
+```
+
+### Project Structure
+
+```
+rDeck/
+├── src/
+│   ├── apps/           # Application implementations
+│   ├── services/       # Background services
+│   │   └── RnsUtils/   # Reticulum utilities (TrustedServers, ServiceProtocol)
+│   ├── retOS/          # Core OS (RetOS, RetUI, Events, TimeHelper)
+│   ├── retHal/         # Hardware abstraction layer
+│   └── boards/         # Board-specific code (T-Deck Pro, Emulator)
+├── companion-server/   # Python companion server
+│   ├── companion_server/
+│   │   ├── protocol/   # Message definitions, serialization
+│   │   ├── services/   # NTP, Search services
+│   │   └── tui/        # Textual TUI
+│   └── tests/          # Python test suite
+├── test/               # C++ unit tests
+├── hal/                # SDL2 HAL for emulator
+└── lib/                # Local libraries
+```
+
+## Protocol
+
+rDeck and the Companion Server communicate using a msgpack-based protocol over LXMF messages.
+
+### Message Types
+
+| Type | Value | Direction | Description |
+|------|-------|-----------|-------------|
+| TRUST_OFFER | 0x01 | Server→Device | Offer to provide services |
+| TRUST_ACCEPT | 0x02 | Device→Server | Accept the trust offer |
+| TRUST_REVOKE | 0x03 | Either | Revoke established trust |
+| NTP_REQUEST | 0x10 | Device→Server | Request current time |
+| NTP_RESPONSE | 0x11 | Server→Device | Time response with RTT data |
+| SEARCH_REQUEST | 0x20 | Device→Server | Web search query |
+| SEARCH_RESPONSE | 0x21 | Server→Device | Search results |
+
+## Contributing
+
+Contributions are welcome! Please ensure:
+- Code compiles for both hardware and emulator targets
+- Unit tests pass (`pio test -e test_native` and `pytest`)
+- Protocol changes are synchronized between Python and C++ implementations
 
 ## License
 
 MIT
+
+## Acknowledgments
+
+- [Reticulum Network Stack](https://reticulum.network/) - The foundation for mesh networking
+- [LXMF](https://github.com/markqvist/LXMF) - Lightweight Extensible Message Format
+- [microReticulum](https://github.com/attermann/microReticulum) - ESP32 Reticulum implementation
+- [LilyGo](https://www.lilygo.cc/) - T-Deck Pro hardware
