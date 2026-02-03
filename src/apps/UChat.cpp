@@ -36,9 +36,27 @@ static string formatRelativeTime(time_t timestamp) {
     uchat_ptr = nullptr;
 }
 
-void UChat::renderMessageInConversation(const Retcon::LXMF::Message& message) {
+static const char* getStatusSymbol(Retcon::LXMF::Message::STATUS status) {
+    switch(status) {
+        case Retcon::LXMF::Message::STATUS::QUEUEING:
+        case Retcon::LXMF::Message::STATUS::SENDING:
+            return LV_SYMBOL_REFRESH;
+        case Retcon::LXMF::Message::STATUS::RETRY:
+            return LV_SYMBOL_LOOP;
+        case Retcon::LXMF::Message::STATUS::SENT:
+            return LV_SYMBOL_OK;
+        case Retcon::LXMF::Message::STATUS::FAILED:
+            return LV_SYMBOL_CLOSE;
+        case Retcon::LXMF::Message::STATUS::UNKNOWN_DEST:
+            return LV_SYMBOL_WARNING;
+        default:
+            return "";
+    }
+}
+
+lv_obj_t* UChat::renderMessageInConversation(lv_obj_t* parent, const Retcon::LXMF::Message& message) {
     if(message.msgSentByThem(current_conv->info.their_hash)) {
-        lv_obj_t* them = lv_label_create(conversation_modal);
+        lv_obj_t* them = lv_label_create(parent);
         lv_obj_add_flag(them, LV_OBJ_FLAG_FLEX_IN_NEW_TRACK);
         lv_obj_set_size(them, lv_pct(70), LV_SIZE_CONTENT);
         lv_obj_set_style_pad_all(them, 1, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -47,19 +65,25 @@ void UChat::renderMessageInConversation(const Retcon::LXMF::Message& message) {
         string label_text = (message.title.empty() ? "" : (message.title + "\n"))
                  + message.content + "\n" + formatRelativeTime(message.timestamp);
         lv_label_set_text(them, label_text.c_str());
+        return them;
     } else {
-        lv_obj_t* spacer = lv_obj_create(conversation_modal);
+        lv_obj_t* spacer = lv_obj_create(parent);
         lv_obj_add_flag(spacer, LV_OBJ_FLAG_FLEX_IN_NEW_TRACK);
         lv_obj_set_size(spacer, lv_pct(29), LV_SIZE_CONTENT);
 
-        lv_obj_t* me = lv_label_create(conversation_modal);
+        lv_obj_t* me = lv_label_create(parent);
         lv_obj_set_size(me, lv_pct(70), LV_SIZE_CONTENT);
         lv_obj_set_style_pad_all(me, 1, LV_PART_MAIN | LV_STATE_DEFAULT);
         lv_obj_set_style_border_width(me, 1, LV_PART_MAIN | LV_STATE_DEFAULT);
         lv_obj_set_style_border_color(me, _retos->ui()->fg_color(), LV_PART_MAIN | LV_STATE_DEFAULT);
         string label_text = (message.title.empty() ? "" : (message.title + "\n"))
                  + message.content + "\n" + formatRelativeTime(message.timestamp);
-        lv_label_set_text(me, label_text.c_str());    
+        const char* sym = getStatusSymbol(message.status);
+        if(sym[0] != '\0') {
+            label_text += " " + string(sym);
+        }
+        lv_label_set_text(me, label_text.c_str());
+        return me;
     }
 
 }
@@ -69,7 +93,14 @@ void UChat::sendToCurrentConversation(const char* title, const char* content) {
         Serial.println("[UChat] ERROR: Cannot send - no valid conversation open");
         return;
     }
+    Serial.print("[UChat] Sending message to: ");
+    Serial.println(current_conv->info.their_hash.toHex().c_str());
+    Serial.print("[UChat] Content: '");
+    Serial.print(content);
+    Serial.println("'");
     auto msg = _rns_service->sendLxmfMsg(current_conv->info.their_hash, title, content);
+    Serial.print("[UChat] Message status after sendLxmfMsg: ");
+    Serial.println((int)msg->status);
     _queued_msgs.insert(msg);
 }
 
@@ -103,39 +134,57 @@ void UChat::openConversation(const RNS::Bytes& their_hash) {
 void UChat::drawCurrentConversation(bool clear) {
     if(clear) {
         lv_obj_clean(conversation_modal);
+        message_container = nullptr;
     }
 
     lv_obj_set_size(conversation_modal, lv_pct(100), lv_pct(100));
     lv_obj_set_style_pad_all(conversation_modal, 1, LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_flex_flow(conversation_modal, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_flow(conversation_modal, LV_FLEX_FLOW_COLUMN);
 
+    // Title bar
     lv_obj_t* title = lv_label_create(conversation_modal);
     lv_obj_set_style_border_width(title, 1, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_border_color(title, _retos->ui()->fg_color(), LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_border_side(title, LV_BORDER_SIDE_BOTTOM, LV_PART_MAIN | LV_STATE_DEFAULT);
     string title_txt = current_conv->info.their_name;
-
     if(title_txt.size() < 1) title_txt = current_conv->info.their_hash.toHex();
-
     lv_label_set_text(title, title_txt.c_str());
     lv_obj_set_size(title, lv_pct(100), LV_SIZE_CONTENT);
 
-    // render existing messages in the conversation
+    // Scrollable message container
+    message_container = lv_obj_create(conversation_modal);
+    lv_obj_set_size(message_container, lv_pct(100), 0);
+    lv_obj_set_flex_grow(message_container, 1);
+    lv_obj_set_flex_flow(message_container, LV_FLEX_FLOW_ROW_WRAP);
+    lv_obj_set_style_pad_all(message_container, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_border_width(message_container, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_add_flag(message_container, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scroll_dir(message_container, LV_DIR_VER);
+
+    // Render existing messages
     for (const auto& msg : current_conv->getMessages()) {
-        renderMessageInConversation(msg);
+        renderMessageInConversation(message_container, msg);
     }
 
-    // text input
-    lv_obj_t * ta = lv_textarea_create(conversation_modal);
+    // Force layout calculation then scroll to bottom
+    lv_obj_update_layout(message_container);
+    lv_obj_scroll_to_y(message_container, lv_obj_get_scroll_bottom(message_container), LV_ANIM_OFF);
+
+    // Input row
+    lv_obj_t* input_row = lv_obj_create(conversation_modal);
+    lv_obj_set_size(input_row, lv_pct(100), LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(input_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_style_pad_all(input_row, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_border_width(input_row, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+
+    lv_obj_t * ta = lv_textarea_create(input_row);
     lv_group_add_obj(_retos->ui()->default_input_group(), ta);
-    lv_obj_add_flag(ta, LV_OBJ_FLAG_FLEX_IN_NEW_TRACK);
-    lv_obj_set_flex_grow(ta, 3); // GROW!
+    lv_obj_set_flex_grow(ta, 1);
     lv_obj_set_style_border_width(ta, 2, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_border_color(ta, _retos->ui()->fg_color(), LV_PART_MAIN | LV_STATE_DEFAULT);
 
-    lv_obj_t * send_btn = lv_btn_create(conversation_modal);
+    lv_obj_t * send_btn = lv_btn_create(input_row);
     lv_obj_set_size(send_btn, 50, 50);
-
     lv_obj_set_style_border_width(send_btn, 1, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_border_color(send_btn, _retos->ui()->fg_color(), LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_add_event_cb(send_btn, send_msg_cb, LV_EVENT_CLICKED, ta);
@@ -317,19 +366,23 @@ EventStatus UChat::onEvent(const Event& event) {
         case NEW_MESSAGE:
         {
             if(conversation_modal != nullptr && current_conv != nullptr) {
-                // Only redraw if message is for the current conversation
+                // Redraw if message is for the current conversation
+                // (src matches for received msgs, dest matches for sent msgs)
                 shared_ptr<Retcon::LXMF::Message> msg_ptr =
                     std::static_pointer_cast<Retcon::LXMF::Message>(event.data);
-                if(msg_ptr && msg_ptr->src == current_conv->info.their_hash) {
+                if(msg_ptr && (msg_ptr->src == current_conv->info.their_hash ||
+                               msg_ptr->dest == current_conv->info.their_hash)) {
                     drawCurrentConversation(true);
                 }
+            } else {
+                // No conversation open — refresh main menu to show new/updated conversations
+                renderMainMenu();
             }
             return HANDLED_PROPOGATE;
         }
 
         case MESSAGE_UPDATE:
         {
-            // Redraw if conversation is open (status updates are rare enough this is fine)
             if(conversation_modal != nullptr && current_conv != nullptr) {
                 drawCurrentConversation(true);
             }

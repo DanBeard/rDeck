@@ -46,9 +46,18 @@ AnnounceData::AnnounceData(JsonArray &array) {
     app_data.assign((uint8_t*)adb.data(), adb.size());
 
     last_heard = array[2];
+
+    if(array.size() > 3 && !array[3].isNull()) {
+        MsgPackBinary pkb = array[3].as<MsgPackBinary>();
+        public_key.assign((uint8_t*)pkb.data(), pkb.size());
+    }
 }
 
 AnnounceData::AnnounceData(const RNS::Bytes &dest, const RNS::Bytes &app_data, const time_t last_heard) : dest(dest), app_data(app_data), last_heard(last_heard){
+
+}
+
+AnnounceData::AnnounceData(const RNS::Bytes &dest, const RNS::Bytes &app_data, const RNS::Bytes &public_key, const time_t last_heard) : dest(dest), app_data(app_data), public_key(public_key), last_heard(last_heard){
 
 }
 
@@ -57,6 +66,7 @@ void AnnounceData::serialize(JsonArray &array)  {
     array.add(MsgPackBinary(dest.data(), dest.size()));
     array.add(MsgPackBinary(app_data.data(), app_data.size()));
     array.add(last_heard);
+    array.add(MsgPackBinary(public_key.data(), public_key.size()));
 }
 
 Retcon::LXMF::Message::Message() 
@@ -167,13 +177,14 @@ const set<AnnounceData>* Retcon::LXMF::getAnnounceData() {
             JsonDocument doc;
             File dataFile = fs->open(LXMF_ANNOUNCE_DATA_FILE_PATH);
             DeserializationError error = deserializeMsgPack(doc, dataFile);
-            // TODO version check
-            if(error == DeserializationError::Code::Ok) {
+            if(error == DeserializationError::Code::Ok && doc["version"].as<int>() == LXMF_SCHEMA_VERSION) {
                 JsonArray data = doc["messages"];
                 for(int i=0; i< data.size() && i< NUM_ANNOUNCES; i++) {
                     JsonArray msgArray = data[i].as<JsonArray>();
                     lxmf_data.insert(AnnounceData(msgArray));
                 }
+            } else {
+                Serial.println("[LXMF] Announce data version mismatch or parse error, discarding old data");
             }
 
             doc.clear();
@@ -197,7 +208,7 @@ void Retcon::LXMF::addAnnounceData(AnnounceData &a) {
             JsonDocument doc;
             File dataFile = fs->open(LXMF_ANNOUNCE_DATA_FILE_PATH);
             DeserializationError error = deserializeMsgPack(doc, dataFile);
-            if(error == DeserializationError::Code::Ok) {
+            if(error == DeserializationError::Code::Ok && doc["version"].as<int>() == LXMF_SCHEMA_VERSION) {
                 JsonArray data = doc["messages"];
                 for(int i=0; i< data.size() && i< NUM_ANNOUNCES; i++) {
                     JsonArray msgArray = data[i].as<JsonArray>();
@@ -236,13 +247,11 @@ void Retcon::LXMF::persistAnnounceData(){
      FS* fs = retOsGlobalPtr->hal().fs;
      JsonDocument doc;
      doc["version"] = LXMF_SCHEMA_VERSION;
-     doc["messages"].createNestedArray();
+     JsonArray msgs = doc["messages"].to<JsonArray>();
 
-     JsonArray msgs = doc["messages"];
      // copy the announce data into the struct
-     uint32_t i = 0;
      for(AnnounceData ad: lxmf_data) {
-        JsonArray msgArray = msgs[i++].createNestedArray();
+        JsonArray msgArray = msgs.add<JsonArray>();
         ad.serialize(msgArray);
      }
 
@@ -278,9 +287,11 @@ static void load_converstion(const RNS::Bytes &src_hash, Conversation &conv) {
 
         conv.deserialize(doc);
         doc.clear();
-    } else {
-        conv.info.their_hash = src_hash;
     }
+
+    // Always ensure their_hash is set — deserialize may have skipped (version mismatch)
+    // or file may not exist yet
+    conv.info.their_hash = src_hash;
 
     // ALWAYS try to refresh name from announce data if empty
     if(conv.info.their_name.empty()) {
@@ -334,15 +345,23 @@ void Retcon::LXMF::addMessageToConversation(const Message &msg, const RNS::Bytes
     ensureMutex();
     LXMF_LOCK();
 
+    // Remove stale metadata entry for this hash (if any)
+    for(auto it = conversations_set.begin(); it != conversations_set.end(); ++it) {
+        if(it->their_hash == their_hash) {
+            conversations_set.erase(it);
+            break;
+        }
+    }
+
     if(their_hash == current_conv.info.their_hash) {
         current_conv.addMessage(msg);
         persistConversation(current_conv);
+        conversations_set.insert(current_conv.info);
     } else {
         // ouch -- gotta load the whole thing to persist a single new message
         load_converstion(their_hash, temp_conv);
         temp_conv.addMessage(msg);
         persistConversation(temp_conv);
-        // make sure it's in the meta list
         conversations_set.insert(temp_conv.info);
         temp_conv.clear();
     }
@@ -381,32 +400,39 @@ void ConversationMetaInfo::serialize(JsonObject &obj) {
 }
 
 void ConversationMetaInfo::deserialize(JsonObject &obj) {
+    if (obj.isNull()) return;
     MsgPackBinary thb = obj["their_hash"].as<MsgPackBinary>();
-    their_hash.assign((uint8_t*)thb.data(), thb.size());
-
+    if (thb.data() != nullptr && thb.size() > 0) {
+        their_hash.assign((uint8_t*)thb.data(), thb.size());
+    }
     their_name = safeGetString(obj["their_name"]);
     last_message_at = obj["last_message_at"].as<long>();
 }
 
 void Conversation::serialize(JsonDocument &doc) {
-    JsonObject infoObj = doc["info"].createNestedObject();
+    doc["version"] = LXMF_SCHEMA_VERSION;
+    JsonObject infoObj = doc["info"].to<JsonObject>();
     info.serialize(infoObj);
-    JsonArray msgListArray = doc["messages"].createNestedArray();
+    JsonArray msgListArray = doc["messages"].to<JsonArray>();
 
-    int i = 0;
     for(Message msg : this->msgs) {
-       JsonArray msgArray =  msgListArray[i++].createNestedArray();
+       JsonArray msgArray = msgListArray.add<JsonArray>();
        msg.serialize(msgArray);
     }
 
 }
 
 void Conversation::deserialize(JsonDocument &doc) {
+    if (doc["version"].as<int>() != LXMF_SCHEMA_VERSION || !doc["info"].is<JsonObject>()) {
+        Serial.println("[LXMF] WARNING: conversation file has invalid format or wrong version, skipping");
+        return;
+    }
     JsonObject infoObj = doc["info"];
     info.deserialize(infoObj);
 
     JsonArray msgListArray = doc["messages"];
     for(int i = 0; i < msgListArray.size() && i < max_messages; i++) {
+        if (!msgListArray[i].is<JsonArray>()) continue;
         JsonArray msgArray = msgListArray[i];
         msgs.push_back(Message(msgArray));
     }
@@ -428,11 +454,19 @@ static void getAllConversationInfo_nolock() {
         deserializeMsgPack(doc, f);
         f.close();
 
-        for(int i=0; i<doc.size();i++){
-            JsonObject obj = doc[i];
-            ConversationMetaInfo info;
-            info.deserialize(obj);
-            conversations_set.insert(info);
+        if (doc["version"].as<int>() == LXMF_SCHEMA_VERSION && doc["data"].is<JsonArray>()) {
+            JsonArray data = doc["data"];
+            for(int i=0; i<data.size();i++){
+                if (!data[i].is<JsonObject>()) continue;
+                JsonObject obj = data[i];
+                ConversationMetaInfo info;
+                info.deserialize(obj);
+                if (info.their_hash.size() > 0) {
+                    conversations_set.insert(info);
+                }
+            }
+        } else {
+            Serial.println("[LXMF] Conversation metadata version mismatch, discarding old data");
         }
 
         doc.clear();
@@ -458,10 +492,12 @@ void Retcon::LXMF::persistAllConversationInfo(){
         string path = LXMF_CONVERSATION_FOLDER  "message_set.bin";
 
         JsonDocument doc;
+        doc["version"] = LXMF_SCHEMA_VERSION;
+        JsonArray data = doc["data"].to<JsonArray>();
         int i = 0;
         for(ConversationMetaInfo info: conversations_set) {
-            if(i < ConversationMetaInfo::max_converstaions) {
-                JsonObject obj = doc[i++].createNestedObject();
+            if(i++ < ConversationMetaInfo::max_converstaions) {
+                JsonObject obj = data.add<JsonObject>();
                 info.serialize(obj);
             }
         }

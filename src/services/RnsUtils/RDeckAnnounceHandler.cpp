@@ -13,7 +13,11 @@ void RDeckAnnounceHandler::received_announce(const RNS::Bytes& destination_hash,
 		}
 		time_t now;
     	time(&now);
-		Retcon::LXMF::AnnounceData adata(destination_hash, app_data, now);
+		RNS::Bytes pub_key;
+		if (announced_identity) {
+			pub_key = announced_identity.get_public_key();
+		}
+		Retcon::LXMF::AnnounceData adata(destination_hash, app_data, pub_key, now);
 		addAnnounceData(adata);
 
 		if(now - last_persist >= persist_delay_secs) {

@@ -23,7 +23,7 @@ class UChat : public BaseApp {
             RnsService * _rns_service;
 
             void renderMainMenu();
-            void renderMessageInConversation(const Retcon::LXMF::Message& message);
+            lv_obj_t* renderMessageInConversation(lv_obj_t* parent, const Retcon::LXMF::Message& message);
             void drawCurrentConversation(bool clear=true);
 
             lv_obj_t * tabview;
@@ -31,8 +31,8 @@ class UChat : public BaseApp {
             lv_obj_t * announceview;
             lv_obj_t * statusview;
 
-
             lv_obj_t * conversation_modal = nullptr;
+            lv_obj_t * message_container = nullptr;
             Retcon::LXMF::Conversation *current_conv = nullptr;
 
             set<shared_ptr<Retcon::LXMF::Message>> _queued_msgs;

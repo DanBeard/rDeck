@@ -80,13 +80,19 @@ protected:
 
     boolean _sending_message = false;
     shared_ptr<Retcon::LXMF::Message> _current_sending_msg;
-    RNS::Packet *_sending_packet;
+    RNS::Packet *_sending_packet = nullptr;
     std::queue<shared_ptr<Retcon::LXMF::Message>> _send_msg_queue;
 
     uint8_t _num_retries = 0;
     // actually do the tranmit
     void transmitMsg(shared_ptr<Retcon::LXMF::Message> &msg);
-    
+    void processNextInQueue();
+
+    // Deferred retry/next-send flag — set from receipt callbacks (which run
+    // inside Transport::jobs()), processed in tick() to avoid re-entering
+    // Transport::outbound() while _jobs_running is still true.
+    volatile bool _needs_send_processing = false;
+
     void sendMessageUpdateEvent(shared_ptr<Retcon::LXMF::Message> &msg);
 
     friend void transmit_delivery_cb(const RNS::PacketReceipt &receipt);

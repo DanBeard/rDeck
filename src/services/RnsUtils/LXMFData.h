@@ -11,7 +11,7 @@
 // data classes and serialization/deserialization helper for LXMF data
 
 // up this every time you change a schema. It means we wipe the data but avoid corruption
-#define LXMF_SCHEMA_VERSION 1
+#define LXMF_SCHEMA_VERSION 3
 // Reminder: Keep alignment in mind. This is not packed on purpose for code size and speed
 #define RNS_HASH_SIZE_BYTES 16
 #define RNS_APP_DATA_SIZE_BYTES  285
@@ -23,9 +23,11 @@ namespace Retcon::LXMF {
     class AnnounceData {
         public:
             AnnounceData(JsonArray &array);
-            AnnounceData(const RNS::Bytes &dest, const RNS::Bytes &app_data ,const time_t last_heard);
+            AnnounceData(const RNS::Bytes &dest, const RNS::Bytes &app_data, const time_t last_heard);
+            AnnounceData(const RNS::Bytes &dest, const RNS::Bytes &app_data, const RNS::Bytes &public_key, const time_t last_heard);
             RNS::Bytes dest;
             RNS::Bytes app_data;
+            RNS::Bytes public_key;
             time_t last_heard;
 
             void serialize(JsonArray &array);

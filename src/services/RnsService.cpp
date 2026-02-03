@@ -22,8 +22,14 @@ RnsService::RnsService(uint8_t id): reticulum({RNS::Type::NONE}),
 }
 
 static void onLinkPacket(const RNS::Bytes& plaintext, const RNS::Packet& packet) {
+    Serial.println("[LXMF] *** onLinkPacket callback fired ***");
     Serial.print("[LXMF] Received plaintext size: ");
     Serial.println(plaintext.size());
+
+    if (plaintext.size() < 96) {
+        Serial.println("[LXMF] ERROR: plaintext too small for LXMF message (need at least 96 bytes: 16+16+64)");
+        return;
+    }
 
     shared_ptr<Retcon::LXMF::Message> lxmf_msg = make_shared<Retcon::LXMF::Message>(plaintext);
 
@@ -93,6 +99,18 @@ void RnsService::start(RetOS* retos){
 
     reticulum.transport_enabled(false);
 	reticulum.start();
+
+    // Restore known identities from persisted announce data
+    {
+        const set<Retcon::LXMF::AnnounceData>* announces = Retcon::LXMF::getAnnounceData();
+        for(const Retcon::LXMF::AnnounceData &ad : *announces) {
+            if(ad.public_key.size() > 0) {
+                RNS::Identity::remember(ad.dest, ad.dest, ad.public_key, ad.app_data);
+                Serial.print("[RNS] Restored identity for: ");
+                Serial.println(ad.dest.toHex().c_str());
+            }
+        }
+    }
 
     // do we have a saved identity?
     if(!_fs->exists("/reticulum")){
@@ -220,6 +238,19 @@ void RnsService::announce() {
 	}
 }
 
+void RnsService::processNextInQueue() {
+    _msg_mutex.lock();
+    if(!_sending_message && _send_msg_queue.size() > 0) {
+        transmitMsg(_send_msg_queue.front());
+        _send_msg_queue.pop();
+    } else if(_sending_message && _current_sending_msg &&
+              _current_sending_msg->status == Retcon::LXMF::Message::STATUS::RETRY) {
+        // Retry the current message
+        transmitMsg(_current_sending_msg);
+    }
+    _msg_mutex.unlock();
+}
+
 static unsigned long last_announce = 0;
 void RnsService::tick(const unsigned long tMillis) {
     // TODO TEMP FOR TESTING REMOVE ME OR MAKE MUCH LONGER OR VIA CONFIG
@@ -231,6 +262,12 @@ void RnsService::tick(const unsigned long tMillis) {
     }
     reticulum.loop();
     lora_interface_impl->tick(lora_interface);
+
+    // Process deferred send/retry from receipt callbacks
+    if(_needs_send_processing) {
+        _needs_send_processing = false;
+        processNextInQueue();
+    }
 }
 
 void RnsService::updateIcon(bool status){
@@ -255,27 +292,31 @@ shared_ptr<Retcon::LXMF::Message> RnsService::sendLxmfMsg(const RNS::Bytes dest,
     shared_ptr<Retcon::LXMF::Message> msg = make_shared<Retcon::LXMF::Message>(lxmf_delivery_src.hash(), dest, title, contents);
     msg->status = Retcon::LXMF::Message::STATUS::QUEUEING;
 
+    // Store in conversation immediately so it shows in the UI
+    Retcon::LXMF::addMessageToConversation(*msg, dest);
+
     _msg_mutex.lock();
 
-    Serial.println("SENDING LXMF MESSAGE");
-    // if nothings going on, then just send it!
-    if(!_sending_message && _send_msg_queue.size() == 0) {
-        Serial.println("TRANSMITTING LXMF MESSAGE");
-        transmitMsg(msg);
-    } else if(_send_msg_queue.size() > max_number_queued_msgs) {
-        Serial.println("DROPPING LXMF MESSAGE");
+    Serial.println("QUEUEING LXMF MESSAGE");
+    if(_send_msg_queue.size() > max_number_queued_msgs) {
+        Serial.println("DROPPING LXMF MESSAGE - queue full");
         _msg_mutex.unlock();
-        return msg; // drop it
-    } else {
-        Serial.println("QUEUEING LXMF MESSAGE");
-        _send_msg_queue.push(msg);
+        return msg;
     }
-    if(!_sending_message && _send_msg_queue.size() > 0) {
-        transmitMsg(_send_msg_queue.front());
-        _send_msg_queue.pop();
-    }
+    _send_msg_queue.push(msg);
+    // Defer actual transmit to tick() on the services task, avoiding
+    // cross-thread calls into Transport::outbound() which can deadlock.
+    _needs_send_processing = true;
 
     _msg_mutex.unlock();
+
+    // Notify UI so the message appears immediately
+    Event e;
+    e.src = this;
+    e.type = NEW_MESSAGE;
+    e.data = msg;
+    _retos->publishEvent(e);
+
     return msg;
 }
 
@@ -283,20 +324,23 @@ const queue<shared_ptr<Retcon::LXMF::Message>>& RnsService::queuedMsgs() const {
     return _send_msg_queue;
 }
 
+// Receipt callbacks run inside Transport::jobs() where _jobs_running is true.
+// We must NOT call transmitMsg (which calls packet.send() → Transport::outbound())
+// from here, or outbound() will spinlock waiting for _jobs_running to clear.
+// Instead, update state and set a flag for tick() to process.
+
 void transmit_delivery_cb(const RNS::PacketReceipt &receipt) {
     rnsService->_msg_mutex.lock();
 
     rnsService->_sending_message = false;
     delete rnsService->_sending_packet;
+    rnsService->_sending_packet = nullptr;
     rnsService->_current_sending_msg->status = Retcon::LXMF::Message::STATUS::SENT;
-    // For sent messages, dest is the recipient (them)
-    Retcon::LXMF::addMessageToConversation(*(rnsService->_current_sending_msg), rnsService->_current_sending_msg->dest);
+    Serial.println("[LXMF] Message delivery confirmed (ACK received)");
     rnsService->sendMessageUpdateEvent(rnsService->_current_sending_msg);
 
-    if(rnsService->_send_msg_queue.size() > 0) {
-        rnsService->transmitMsg(rnsService->_send_msg_queue.front());
-        rnsService->_send_msg_queue.pop();
-    }
+    // Defer sending next queued message to tick()
+    rnsService->_needs_send_processing = true;
 
     rnsService->_msg_mutex.unlock();
 }
@@ -308,26 +352,25 @@ void transmit_timeout_cb(const RNS::PacketReceipt &receipt) {
 
     if(rnsService->_num_retries++ > RnsService::max_number_retries) {
         delete rnsService->_sending_packet;
+        rnsService->_sending_packet = nullptr;
         rnsService->_sending_message = false;
         rnsService->_current_sending_msg->status = Retcon::LXMF::Message::STATUS::FAILED;
-        // For sent messages, dest is the recipient (them)
-        Retcon::LXMF::addMessageToConversation(*(rnsService->_current_sending_msg), rnsService->_current_sending_msg->dest);
+        Serial.println("[LXMF] Message delivery FAILED after max retries");
         rnsService->sendMessageUpdateEvent(rnsService->_current_sending_msg);
-
-        if(rnsService->_send_msg_queue.size() > 0) {
-            rnsService->transmitMsg(rnsService->_send_msg_queue.front());
-            rnsService->_send_msg_queue.pop();
-        }
-    } else {
-        rnsService->transmitMsg(rnsService->_current_sending_msg);
     }
+    // else: retry current message
+
+    // Defer retry/next-send to tick()
+    rnsService->_needs_send_processing = true;
 
     rnsService->_msg_mutex.unlock();
 }
 void RnsService::transmitMsg(shared_ptr<Retcon::LXMF::Message>& msg) {
     if(_sending_message && msg != _current_sending_msg) return;
+    if (!_sending_message || msg != _current_sending_msg) {
+        _num_retries = 0;
+    }
     _sending_message = true;
-    _num_retries = 0;
 
     // find the dest destination and pack the msg
     RNS::Identity their_ident = RNS::Identity::recall(msg->dest);
@@ -350,7 +393,11 @@ void RnsService::transmitMsg(shared_ptr<Retcon::LXMF::Message>& msg) {
     _current_sending_msg = msg;
     _current_sending_msg->status = Retcon::LXMF::Message::STATUS::SENDING;
     RNS::Bytes fullMsg = _current_sending_msg->fullMsg();
-    _sending_packet = new RNS::Packet(their_dest, fullMsg);
+    // Strip dest_hash (first 16 bytes) for opportunistic single-packet delivery.
+    // Python LXMF receivers reconstruct dest from Reticulum packet metadata.
+    RNS::Bytes packetData = fullMsg.mid(RNS_HASH_SIZE_BYTES);
+    delete _sending_packet;
+    _sending_packet = new RNS::Packet(their_dest, packetData);
     _sending_packet->send();
     RNS::PacketReceipt receipt = _sending_packet->receipt();
     receipt.set_timeout(packet_timeout_secs);
@@ -367,7 +414,7 @@ bool RnsService::drawSettings(lv_obj_t * container, Settings* settings) {
 
     JsonObject _settings = settings->getSettings(settingsSection);
     if(!_settings.containsKey("lora") || _settings["lora"].isNull()) {
-            _settings.createNestedObject("lora");
+            _settings["lora"].to<JsonObject>();
     }
 
     BaseLora *radio = retOsGlobalPtr->hal().lora;
