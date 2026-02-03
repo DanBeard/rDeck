@@ -17,6 +17,9 @@ public:
     // full refresh for e-ink type displays that differentiate
     virtual void fullRefresh() override;
 
+    // Force a full e-ink refresh cycle (no-op for emulator)
+    virtual void forceFullRefresh(uint8_t color = 0xFF) override;
+
     // SDL event processing - call in main loop
     void processEvents();
 

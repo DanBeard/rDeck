@@ -100,13 +100,23 @@ void UChat::sendToCurrentConversation(const char* title, const char* content) {
     _queued_msgs.insert(msg);
 }
 
-static void send_msg_cb(lv_event_t * event) {
-    lv_obj_t* btm = lv_event_get_target(event);
-    lv_obj_t* ta = (lv_obj_t*) lv_event_get_user_data(event);
+// Common send logic used by both button click and Enter key
+static void do_send_message(lv_obj_t* ta) {
     const char* msg_txt = lv_textarea_get_text(ta);
-    // TODO no titles for now.
+    if (msg_txt == nullptr || msg_txt[0] == '\0') return;  // Don't send empty messages
     uchat_ptr->sendToCurrentConversation("", msg_txt);
     lv_textarea_set_text(ta, "");
+}
+
+static void send_msg_cb(lv_event_t * event) {
+    lv_obj_t* ta = (lv_obj_t*) lv_event_get_user_data(event);
+    do_send_message(ta);
+}
+
+// Called when Enter is pressed in the textarea (LV_EVENT_READY)
+static void ta_enter_cb(lv_event_t * event) {
+    lv_obj_t* ta = lv_event_get_target(event);
+    do_send_message(ta);
 }
 
 void UChat::openConversation(const RNS::Bytes& their_hash) {
@@ -178,6 +188,8 @@ void UChat::drawCurrentConversation(bool clear) {
     lv_obj_set_style_border_width(ta, 1, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_border_color(ta, _retos->ui()->fg_color(), LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_pad_all(ta, 3, LV_PART_MAIN | LV_STATE_DEFAULT);
+    // Send message when Enter is pressed
+    lv_obj_add_event_cb(ta, ta_enter_cb, LV_EVENT_READY, nullptr);
 
     lv_obj_t * send_btn = lv_btn_create(input_row);
     lv_obj_set_size(send_btn, 35, 30);

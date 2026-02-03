@@ -8,6 +8,11 @@
 #include <Arduino.h>
 #endif
 
+#ifdef UNIT_TEST
+// Forward declare FS for test functions
+class FS;
+#endif
+
 // data classes and serialization/deserialization helper for LXMF data
 
 // up this every time you change a schema. It means we wipe the data but avoid corruption
@@ -185,6 +190,13 @@ namespace Retcon::LXMF {
     void persistCurrentConversation();
     // their_hash is the other party in the conversation (sender for received, recipient for sent)
     void addMessageToConversation(const Message &msg, const RNS::Bytes &their_hash);
+
+#ifdef UNIT_TEST
+    // Reset all in-memory state for testing purposes
+    void resetAllState();
+    // Set a test filesystem (used instead of retOsGlobalPtr->hal().fs when non-null)
+    void setTestFilesystem(::FS* fs);
+#endif
 }
 
 

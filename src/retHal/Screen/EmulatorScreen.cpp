@@ -158,6 +158,11 @@ void EmulatorScreen::fullRefresh() {
     SDL_RenderPresent(_renderer);
 }
 
+void EmulatorScreen::forceFullRefresh(uint8_t color) {
+    // No-op for emulator - e-ink ghosting doesn't apply
+    (void)color;
+}
+
 void EmulatorScreen::processEvents() {
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
