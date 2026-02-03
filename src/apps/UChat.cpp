@@ -55,37 +55,33 @@ static const char* getStatusSymbol(Retcon::LXMF::Message::STATUS status) {
 }
 
 lv_obj_t* UChat::renderMessageInConversation(lv_obj_t* parent, const Retcon::LXMF::Message& message) {
-    if(message.msgSentByThem(current_conv->info.their_hash)) {
-        lv_obj_t* them = lv_label_create(parent);
-        lv_obj_add_flag(them, LV_OBJ_FLAG_FLEX_IN_NEW_TRACK);
-        lv_obj_set_size(them, lv_pct(70), LV_SIZE_CONTENT);
-        lv_obj_set_style_pad_all(them, 1, LV_PART_MAIN | LV_STATE_DEFAULT);
-        lv_obj_set_style_border_width(them, 1, LV_PART_MAIN | LV_STATE_DEFAULT);
-        lv_obj_set_style_border_color(them, _retos->ui()->fg_color(), LV_PART_MAIN | LV_STATE_DEFAULT);
-        string label_text = (message.title.empty() ? "" : (message.title + "\n"))
-                 + message.content + "\n" + formatRelativeTime(message.timestamp);
-        lv_label_set_text(them, label_text.c_str());
-        return them;
-    } else {
-        lv_obj_t* spacer = lv_obj_create(parent);
-        lv_obj_add_flag(spacer, LV_OBJ_FLAG_FLEX_IN_NEW_TRACK);
-        lv_obj_set_size(spacer, lv_pct(29), LV_SIZE_CONTENT);
+    // Each message gets a full-width row; alignment pushes bubble left or right
+    lv_obj_t* row = lv_obj_create(parent);
+    lv_obj_set_size(row, lv_pct(100), LV_SIZE_CONTENT);
+    lv_obj_set_style_pad_all(row, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_border_width(row, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
 
-        lv_obj_t* me = lv_label_create(parent);
-        lv_obj_set_size(me, lv_pct(70), LV_SIZE_CONTENT);
-        lv_obj_set_style_pad_all(me, 1, LV_PART_MAIN | LV_STATE_DEFAULT);
-        lv_obj_set_style_border_width(me, 1, LV_PART_MAIN | LV_STATE_DEFAULT);
-        lv_obj_set_style_border_color(me, _retos->ui()->fg_color(), LV_PART_MAIN | LV_STATE_DEFAULT);
-        string label_text = (message.title.empty() ? "" : (message.title + "\n"))
-                 + message.content + "\n" + formatRelativeTime(message.timestamp);
+    lv_obj_t* bubble = lv_label_create(row);
+    lv_obj_set_size(bubble, lv_pct(70), LV_SIZE_CONTENT);
+    lv_obj_set_style_pad_all(bubble, 1, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_border_width(bubble, 1, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_border_color(bubble, _retos->ui()->fg_color(), LV_PART_MAIN | LV_STATE_DEFAULT);
+
+    string label_text = (message.title.empty() ? "" : (message.title + "\n"))
+             + message.content + "\n" + formatRelativeTime(message.timestamp);
+
+    if(message.msgSentByThem(current_conv->info.their_hash)) {
+        lv_obj_align(bubble, LV_ALIGN_TOP_LEFT, 0, 0);
+    } else {
         const char* sym = getStatusSymbol(message.status);
         if(sym[0] != '\0') {
             label_text += " " + string(sym);
         }
-        lv_label_set_text(me, label_text.c_str());
-        return me;
+        lv_obj_align(bubble, LV_ALIGN_TOP_RIGHT, 0, 0);
     }
 
+    lv_label_set_text(bubble, label_text.c_str());
+    return row;
 }
 
 void UChat::sendToCurrentConversation(const char* title, const char* content) {
@@ -155,8 +151,9 @@ void UChat::drawCurrentConversation(bool clear) {
     message_container = lv_obj_create(conversation_modal);
     lv_obj_set_size(message_container, lv_pct(100), 0);
     lv_obj_set_flex_grow(message_container, 1);
-    lv_obj_set_flex_flow(message_container, LV_FLEX_FLOW_ROW_WRAP);
+    lv_obj_set_flex_flow(message_container, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_all(message_container, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_row(message_container, 2, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_border_width(message_container, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_add_flag(message_container, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_scroll_dir(message_container, LV_DIR_VER);
@@ -165,10 +162,6 @@ void UChat::drawCurrentConversation(bool clear) {
     for (const auto& msg : current_conv->getMessages()) {
         renderMessageInConversation(message_container, msg);
     }
-
-    // Force layout calculation then scroll to bottom
-    lv_obj_update_layout(message_container);
-    lv_obj_scroll_to_y(message_container, lv_obj_get_scroll_bottom(message_container), LV_ANIM_OFF);
 
     // Input row
     lv_obj_t* input_row = lv_obj_create(conversation_modal);
@@ -180,11 +173,14 @@ void UChat::drawCurrentConversation(bool clear) {
     lv_obj_t * ta = lv_textarea_create(input_row);
     lv_group_add_obj(_retos->ui()->default_input_group(), ta);
     lv_obj_set_flex_grow(ta, 1);
-    lv_obj_set_style_border_width(ta, 2, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_height(ta, 30);
+    lv_textarea_set_one_line(ta, true);
+    lv_obj_set_style_border_width(ta, 1, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_border_color(ta, _retos->ui()->fg_color(), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_all(ta, 3, LV_PART_MAIN | LV_STATE_DEFAULT);
 
     lv_obj_t * send_btn = lv_btn_create(input_row);
-    lv_obj_set_size(send_btn, 50, 50);
+    lv_obj_set_size(send_btn, 35, 30);
     lv_obj_set_style_border_width(send_btn, 1, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_border_color(send_btn, _retos->ui()->fg_color(), LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_add_event_cb(send_btn, send_msg_cb, LV_EVENT_CLICKED, ta);
@@ -194,6 +190,14 @@ void UChat::drawCurrentConversation(bool clear) {
     lv_label_set_text(send_btn_label, LV_SYMBOL_PLAY);
     lv_obj_set_style_text_color(send_btn_label, _retos->ui()->fg_color(),  LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_center(send_btn_label);
+
+    // Auto-focus the textarea so the user can type immediately
+    lv_group_focus_obj(ta);
+
+    // Force full layout calculation (conversation_modal must be resolved first
+    // so message_container gets its actual height from flex_grow), then scroll
+    lv_obj_update_layout(conversation_modal);
+    lv_obj_scroll_to_y(message_container, lv_obj_get_scroll_bottom(message_container), LV_ANIM_OFF);
 }
 
 const function<void()> UChat::customBackButtonAction() {

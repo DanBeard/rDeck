@@ -178,6 +178,8 @@ static void tdeck_pro_touchpad_read(lv_indev_drv_t * indev_drv, lv_indev_data_t 
     lv_indev_drv_init(&indev_drv);
     indev_drv.type = LV_INDEV_TYPE_POINTER;
     indev_drv.read_cb = tdeck_pro_touchpad_read;
+    indev_drv.scroll_limit = 5;    // engage scroll sooner (default 10)
+    indev_drv.scroll_throw = 20;   // more momentum for e-paper (default 10)
     lv_indev_drv_register(&indev_drv);
 }
 
