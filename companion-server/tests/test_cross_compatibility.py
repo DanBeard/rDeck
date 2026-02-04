@@ -350,3 +350,269 @@ class TestDecodeFromCppVectors:
         assert decoded.query == "cpp query"
         assert len(decoded.results) == 1
         assert decoded.results[0].title == "CppResult"
+
+
+class TestNTPWorkflowCompatibility:
+    """Tests specifically for NTP request/response workflow compatibility.
+
+    These tests verify that the full NTP workflow works correctly between
+    Python (companion server) and C++ (rDeck) implementations.
+    """
+
+    def test_ntp_request_payload_from_cpp_style(self):
+        """Test decoding NTP request as C++ would send it (millis-based timestamp)."""
+        # C++ sends client_timestamp as millis() value (32-bit, wraps around)
+        cpp_client_timestamp = 123456789  # Typical millis() value
+
+        cpp_data = msgpack.packb({
+            "client_timestamp": cpp_client_timestamp,
+        }, use_bin_type=True)
+
+        decoded = _decode_payload(MessageType.NTP_REQUEST, cpp_data)
+
+        assert decoded.client_timestamp == cpp_client_timestamp
+
+    def test_ntp_response_payload_for_cpp(self):
+        """Test encoding NTP response as C++ expects to receive it."""
+        import time
+
+        # Server creates response with epoch timestamp
+        server_time = int(time.time())
+        client_time = 123456789  # Echo back client's millis value
+
+        payload = NTPResponsePayload(
+            server_timestamp=server_time,
+            client_timestamp=client_time,
+        )
+        encoded = _encode_payload(MessageType.NTP_RESPONSE, payload)
+
+        # Verify C++ can decode this structure
+        decoded_raw = msgpack.unpackb(encoded, raw=False)
+
+        assert "server_timestamp" in decoded_raw
+        assert "client_timestamp" in decoded_raw
+        assert decoded_raw["server_timestamp"] == server_time
+        assert decoded_raw["client_timestamp"] == client_time
+
+    def test_ntp_round_trip_simulation(self):
+        """Simulate full NTP request/response round trip."""
+        # 1. C++ sends NTP_REQUEST
+        client_millis = 50000  # 50 seconds since boot
+
+        request_payload = NTPRequestPayload(client_timestamp=client_millis)
+        request_encoded = _encode_payload(MessageType.NTP_REQUEST, request_payload)
+
+        # 2. Python receives and decodes request
+        request_decoded = _decode_payload(MessageType.NTP_REQUEST, request_encoded)
+        assert request_decoded.client_timestamp == client_millis
+
+        # 3. Python creates response
+        import time
+        server_time = int(time.time())
+        response_payload = NTPResponsePayload(
+            server_timestamp=server_time,
+            client_timestamp=request_decoded.client_timestamp,  # Echo back
+        )
+        response_encoded = _encode_payload(MessageType.NTP_RESPONSE, response_payload)
+
+        # 4. C++ would decode response
+        response_decoded = _decode_payload(MessageType.NTP_RESPONSE, response_encoded)
+
+        assert response_decoded.server_timestamp == server_time
+        assert response_decoded.client_timestamp == client_millis
+
+    def test_ntp_full_lxmf_message_format(self):
+        """Test full LXMF message format for NTP response as Python sends it."""
+        from companion_server.protocol import encode_service_fields, ServiceMessage
+
+        # Create NTP response
+        server_time = 1706825600  # Fixed timestamp for testing
+        client_time = 12345
+
+        payload = NTPResponsePayload(
+            server_timestamp=server_time,
+            client_timestamp=client_time,
+        )
+        msg = ServiceMessage(
+            msg_type=MessageType.NTP_RESPONSE,
+            service="ntp",
+            payload=payload,
+            request_id=100,
+        )
+
+        # Encode to LXMF fields
+        fields = encode_service_fields(msg)
+
+        # Create full LXMF packed payload: [timestamp, title, content, fields]
+        lxmf_payload = [
+            1706825600,  # LXMF timestamp
+            b"",         # empty title
+            b"",         # empty content
+            fields,      # service fields
+        ]
+
+        # Pack as msgpack (this is what goes over the wire)
+        packed = msgpack.packb(lxmf_payload, use_bin_type=True)
+
+        # Verify C++ can parse this:
+        unpacked = msgpack.unpackb(packed, raw=False)
+
+        # Check structure
+        assert isinstance(unpacked, list)
+        assert len(unpacked) >= 4
+
+        extracted_fields = unpacked[3]
+        assert isinstance(extracted_fields, dict)
+
+        # Verify service message markers
+        assert extracted_fields["msg_type"] == MessageType.NTP_RESPONSE.value
+        assert extracted_fields["service"] == "ntp"
+        assert extracted_fields["request_id"] == 100
+
+        # Verify inner payload
+        inner_data = msgpack.unpackb(extracted_fields["payload"], raw=False)
+        assert inner_data["server_timestamp"] == server_time
+        assert inner_data["client_timestamp"] == client_time
+
+
+class TestLXMFMessageFormat:
+    """Test the full LXMF message format as it would be transmitted over the wire.
+
+    LXMF packed payload format: [timestamp, title_bytes, content_bytes, fields_dict]
+    This matches what the C++ onLinkPacket receives.
+    """
+
+    def test_lxmf_trust_offer_format(self):
+        """Create LXMF message with TRUST_OFFER fields as Python would send."""
+        from companion_server.protocol import encode_service_fields, ServiceMessage
+
+        # Create the service message
+        payload = TrustOfferPayload(
+            server_name="TestCompanionServer",
+            services=["ntp", "search"],
+        )
+        msg = ServiceMessage(
+            msg_type=MessageType.TRUST_OFFER,
+            service="trust",
+            payload=payload,
+            request_id=12345,
+        )
+
+        # Encode to LXMF fields
+        fields = encode_service_fields(msg)
+
+        # Create full LXMF packed payload: [timestamp, title, content, fields]
+        lxmf_payload = [
+            1706825600,  # timestamp
+            b"",         # empty title
+            b"",         # empty content
+            fields,      # service fields
+        ]
+
+        # Pack as msgpack (this is what goes over the wire)
+        packed = msgpack.packb(lxmf_payload, use_bin_type=True)
+
+        # Now verify C++ would be able to parse this:
+        # 1. Unpack the outer array
+        unpacked = msgpack.unpackb(packed, raw=False)
+        assert isinstance(unpacked, list)
+        assert len(unpacked) >= 4
+
+        # 2. Extract fields (index 3)
+        extracted_fields = unpacked[3]
+        assert isinstance(extracted_fields, dict)
+
+        # 3. Check service message markers
+        assert "msg_type" in extracted_fields
+        assert "service" in extracted_fields
+        assert extracted_fields["msg_type"] == 0x01
+        assert extracted_fields["service"] == "trust"
+
+        # 4. Extract and decode inner payload
+        inner_payload = extracted_fields["payload"]
+        assert isinstance(inner_payload, bytes)
+
+        inner_data = msgpack.unpackb(inner_payload, raw=False)
+        assert inner_data["server_name"] == "TestCompanionServer"
+        assert inner_data["services"] == ["ntp", "search"]
+
+    def test_lxmf_ntp_response_format(self):
+        """Create LXMF message with NTP_RESPONSE fields."""
+        from companion_server.protocol import encode_service_fields, ServiceMessage
+
+        payload = NTPResponsePayload(
+            server_timestamp=1706825600,
+            client_timestamp=5000,
+        )
+        msg = ServiceMessage(
+            msg_type=MessageType.NTP_RESPONSE,
+            service="ntp",
+            payload=payload,
+            request_id=42,
+        )
+
+        fields = encode_service_fields(msg)
+        lxmf_payload = [1706825600, b"", b"", fields]
+        packed = msgpack.packb(lxmf_payload, use_bin_type=True)
+
+        # Verify structure
+        unpacked = msgpack.unpackb(packed, raw=False)
+        extracted_fields = unpacked[3]
+
+        assert extracted_fields["msg_type"] == 0x11
+        assert extracted_fields["service"] == "ntp"
+        assert extracted_fields["request_id"] == 42
+
+        inner_data = msgpack.unpackb(extracted_fields["payload"], raw=False)
+        assert inner_data["server_timestamp"] == 1706825600
+        assert inner_data["client_timestamp"] == 5000
+
+    def test_lxmf_regular_message_no_service_fields(self):
+        """Verify regular LXMF messages (not service messages) have null fields."""
+        # Regular chat message format
+        lxmf_payload = [
+            1706825600,           # timestamp
+            b"Hello",             # title
+            b"Message content",   # content
+            None,                 # no fields
+        ]
+
+        packed = msgpack.packb(lxmf_payload, use_bin_type=True)
+        unpacked = msgpack.unpackb(packed, raw=False)
+
+        assert unpacked[3] is None
+
+    def test_lxmf_search_response_format(self):
+        """Create LXMF message with SEARCH_RESPONSE fields."""
+        from companion_server.protocol import encode_service_fields, ServiceMessage
+
+        payload = SearchResponsePayload(
+            query="test query",
+            results=[
+                SearchResult(title="Result 1", url="https://example.com/1", snippet="First result"),
+                SearchResult(title="Result 2", url="https://example.com/2", snippet="Second result"),
+            ],
+            error=None,
+        )
+        msg = ServiceMessage(
+            msg_type=MessageType.SEARCH_RESPONSE,
+            service="search",
+            payload=payload,
+            request_id=999,
+        )
+
+        fields = encode_service_fields(msg)
+        lxmf_payload = [1706825600, b"", b"", fields]
+        packed = msgpack.packb(lxmf_payload, use_bin_type=True)
+
+        # Verify structure
+        unpacked = msgpack.unpackb(packed, raw=False)
+        extracted_fields = unpacked[3]
+
+        assert extracted_fields["msg_type"] == 0x21
+        assert extracted_fields["service"] == "search"
+
+        inner_data = msgpack.unpackb(extracted_fields["payload"], raw=False)
+        assert inner_data["query"] == "test query"
+        assert len(inner_data["results"]) == 2
+        assert inner_data["results"][0]["title"] == "Result 1"

@@ -100,6 +100,13 @@ void UChat::sendToCurrentConversation(const char* title, const char* content) {
     _queued_msgs.insert(msg);
 }
 
+void UChat::triggerAnnounce() {
+    if (_rns_service) {
+        _rns_service->announce();
+        Serial.println("[UChat] Manual announce triggered");
+    }
+}
+
 // Common send logic used by both button click and Enter key
 static void do_send_message(lv_obj_t* ta) {
     const char* msg_txt = lv_textarea_get_text(ta);
@@ -248,6 +255,26 @@ static void announce_click_callback(lv_event_t * event) {
     uchat_ptr->openConversation(hash);
 }
 
+static void announce_btn_callback(lv_event_t * event) {
+    if (uchat_ptr) {
+        uchat_ptr->triggerAnnounce();
+    }
+}
+
+// Pagination callbacks
+static void announce_next_cb(lv_event_t * event) {
+    if (uchat_ptr) uchat_ptr->nextAnnouncePage();
+}
+static void announce_prev_cb(lv_event_t * event) {
+    if (uchat_ptr) uchat_ptr->prevAnnouncePage();
+}
+static void conversation_next_cb(lv_event_t * event) {
+    if (uchat_ptr) uchat_ptr->nextConversationPage();
+}
+static void conversation_prev_cb(lv_event_t * event) {
+    if (uchat_ptr) uchat_ptr->prevConversationPage();
+}
+
 static void conversation_click_callback(lv_event_t * event) {
     uint16_t row = (uint32_t) lv_event_get_user_data(event);
     Serial.print("Conversation click row: ");
@@ -269,6 +296,187 @@ static void conversation_click_callback(lv_event_t * event) {
     uchat_ptr->openConversation(hash);
 }
 
+void UChat::renderConversationList() {
+    lv_obj_clean(msgview);
+
+    if(_conversations_cache.size() == 0) {
+        lv_obj_t *label = lv_label_create(msgview);
+        lv_obj_set_size(label, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+        lv_obj_set_align(label, LV_ALIGN_CENTER);
+        lv_obj_set_style_text_color(label, _retos->ui()->fg_color(), LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_label_set_text(label, "No Conversations");
+        return;
+    }
+
+    conversation_list_lookup.clear();
+
+    // Use flex layout for list + nav buttons
+    lv_obj_set_flex_flow(msgview, LV_FLEX_FLOW_COLUMN);
+
+    lv_obj_t *list = lv_list_create(msgview);
+    lv_obj_set_flex_grow(list, 1);
+    lv_obj_set_width(list, lv_pct(100));
+    lv_obj_set_style_border_width(list, 1, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_border_color(list, _retos->ui()->fg_color(), LV_PART_MAIN | LV_STATE_DEFAULT);
+
+    size_t start = _conversation_page * ITEMS_PER_PAGE;
+    size_t end = min(start + ITEMS_PER_PAGE, _conversations_cache.size());
+    size_t total_pages = (_conversations_cache.size() + ITEMS_PER_PAGE - 1) / ITEMS_PER_PAGE;
+
+    for(size_t i = start; i < end; i++) {
+        const ConversationMetaInfo &cmi = _conversations_cache[i];
+        string display_name = cmi.their_name.empty() ?
+            cmi.their_hash.toHex().substr(0,12) + "..." : cmi.their_name;
+        string display = display_name + "\n" + formatRelativeTime(cmi.last_message_at);
+
+        conversation_list_lookup.push_back(cmi.their_hash);
+        lv_obj_t* btn = lv_list_add_btn(list, LV_SYMBOL_EDIT, display.c_str());
+        lv_obj_set_style_pad_all(btn, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_add_event_cb(btn, conversation_click_callback, LV_EVENT_CLICKED, (void*)(i - start));
+    }
+
+    // Navigation row (only if multiple pages)
+    if(total_pages > 1) {
+        lv_obj_t *nav_row = lv_obj_create(msgview);
+        lv_obj_set_size(nav_row, lv_pct(100), 30);
+        lv_obj_set_flex_flow(nav_row, LV_FLEX_FLOW_ROW);
+        lv_obj_set_style_pad_all(nav_row, 2, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_border_width(nav_row, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+
+        lv_obj_t *prev_btn = lv_btn_create(nav_row);
+        lv_obj_set_size(prev_btn, 50, 25);
+        lv_obj_t *prev_label = lv_label_create(prev_btn);
+        lv_label_set_text(prev_label, LV_SYMBOL_LEFT);
+        lv_obj_center(prev_label);
+        if(_conversation_page > 0) {
+            lv_obj_add_event_cb(prev_btn, conversation_prev_cb, LV_EVENT_CLICKED, nullptr);
+        } else {
+            lv_obj_add_state(prev_btn, LV_STATE_DISABLED);
+        }
+
+        lv_obj_t *page_label = lv_label_create(nav_row);
+        lv_obj_set_flex_grow(page_label, 1);
+        lv_obj_set_style_text_align(page_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+        string page_text = std::to_string(_conversation_page + 1) + "/" + std::to_string(total_pages);
+        lv_label_set_text(page_label, page_text.c_str());
+
+        lv_obj_t *next_btn = lv_btn_create(nav_row);
+        lv_obj_set_size(next_btn, 50, 25);
+        lv_obj_t *next_label = lv_label_create(next_btn);
+        lv_label_set_text(next_label, LV_SYMBOL_RIGHT);
+        lv_obj_center(next_label);
+        if(_conversation_page < total_pages - 1) {
+            lv_obj_add_event_cb(next_btn, conversation_next_cb, LV_EVENT_CLICKED, nullptr);
+        } else {
+            lv_obj_add_state(next_btn, LV_STATE_DISABLED);
+        }
+    }
+}
+
+void UChat::renderAnnounceList() {
+    lv_obj_clean(announceview);
+
+    if(_announces_cache.size() == 0) {
+        lv_obj_t *label = lv_label_create(announceview);
+        lv_obj_set_size(label, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+        lv_obj_set_align(label, LV_ALIGN_CENTER);
+        lv_obj_set_style_text_color(label, _retos->ui()->fg_color(), LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_label_set_text(label, "No Announces");
+        return;
+    }
+
+    announce_list_lookup.clear();
+
+    // Use flex layout for list + nav buttons
+    lv_obj_set_flex_flow(announceview, LV_FLEX_FLOW_COLUMN);
+
+    lv_obj_t *list = lv_list_create(announceview);
+    lv_obj_set_flex_grow(list, 1);
+    lv_obj_set_width(list, lv_pct(100));
+    lv_obj_set_style_border_width(list, 1, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_border_color(list, _retos->ui()->fg_color(), LV_PART_MAIN | LV_STATE_DEFAULT);
+
+    size_t start = _announce_page * ITEMS_PER_PAGE;
+    size_t end = min(start + ITEMS_PER_PAGE, _announces_cache.size());
+    size_t total_pages = (_announces_cache.size() + ITEMS_PER_PAGE - 1) / ITEMS_PER_PAGE;
+
+    for(size_t i = start; i < end; i++) {
+        const AnnounceData &ad = _announces_cache[i];
+        string dn = ad.displayName() + "\n" + formatRelativeTime(ad.last_heard);
+        announce_list_lookup.push_back(ad.dest);
+        lv_obj_t* btn = lv_list_add_btn(list, LV_SYMBOL_EDIT, dn.c_str());
+        lv_obj_set_style_pad_all(btn, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_add_event_cb(btn, announce_click_callback, LV_EVENT_CLICKED, (void*)(i - start));
+    }
+
+    // Navigation row (only if multiple pages)
+    if(total_pages > 1) {
+        lv_obj_t *nav_row = lv_obj_create(announceview);
+        lv_obj_set_size(nav_row, lv_pct(100), 30);
+        lv_obj_set_flex_flow(nav_row, LV_FLEX_FLOW_ROW);
+        lv_obj_set_style_pad_all(nav_row, 2, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_border_width(nav_row, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+
+        lv_obj_t *prev_btn = lv_btn_create(nav_row);
+        lv_obj_set_size(prev_btn, 50, 25);
+        lv_obj_t *prev_label = lv_label_create(prev_btn);
+        lv_label_set_text(prev_label, LV_SYMBOL_LEFT);
+        lv_obj_center(prev_label);
+        if(_announce_page > 0) {
+            lv_obj_add_event_cb(prev_btn, announce_prev_cb, LV_EVENT_CLICKED, nullptr);
+        } else {
+            lv_obj_add_state(prev_btn, LV_STATE_DISABLED);
+        }
+
+        lv_obj_t *page_label = lv_label_create(nav_row);
+        lv_obj_set_flex_grow(page_label, 1);
+        lv_obj_set_style_text_align(page_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+        string page_text = std::to_string(_announce_page + 1) + "/" + std::to_string(total_pages);
+        lv_label_set_text(page_label, page_text.c_str());
+
+        lv_obj_t *next_btn = lv_btn_create(nav_row);
+        lv_obj_set_size(next_btn, 50, 25);
+        lv_obj_t *next_label = lv_label_create(next_btn);
+        lv_label_set_text(next_label, LV_SYMBOL_RIGHT);
+        lv_obj_center(next_label);
+        if(_announce_page < total_pages - 1) {
+            lv_obj_add_event_cb(next_btn, announce_next_cb, LV_EVENT_CLICKED, nullptr);
+        } else {
+            lv_obj_add_state(next_btn, LV_STATE_DISABLED);
+        }
+    }
+}
+
+void UChat::nextAnnouncePage() {
+    size_t total_pages = (_announces_cache.size() + ITEMS_PER_PAGE - 1) / ITEMS_PER_PAGE;
+    if(_announce_page < total_pages - 1) {
+        _announce_page++;
+        renderAnnounceList();
+    }
+}
+
+void UChat::prevAnnouncePage() {
+    if(_announce_page > 0) {
+        _announce_page--;
+        renderAnnounceList();
+    }
+}
+
+void UChat::nextConversationPage() {
+    size_t total_pages = (_conversations_cache.size() + ITEMS_PER_PAGE - 1) / ITEMS_PER_PAGE;
+    if(_conversation_page < total_pages - 1) {
+        _conversation_page++;
+        renderConversationList();
+    }
+}
+
+void UChat::prevConversationPage() {
+    if(_conversation_page > 0) {
+        _conversation_page--;
+        renderConversationList();
+    }
+}
+
 void UChat::renderMainMenu() {
     lv_obj_clean(screen);
 
@@ -280,75 +488,44 @@ void UChat::renderMainMenu() {
     announceview = lv_tabview_add_tab(tabview, "Announce");
     statusview = lv_tabview_add_tab(tabview, "Status");
 
-    lv_obj_set_size(announceview, lv_pct(100) , lv_pct(100));
+    // Explicit sizing for all tabs to ensure proper layout (fixes pagination visibility)
+    lv_obj_set_size(msgview, lv_pct(100), lv_pct(100));
+    lv_obj_set_style_pad_all(msgview, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+
+    lv_obj_set_size(announceview, lv_pct(100), lv_pct(100));
     lv_obj_set_style_pad_all(announceview, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
 
-    // lv_obj_set_style_bg_color(msgview, _retos->ui()->bg_color(),  LV_STATE_DEFAULT);
-    // lv_obj_set_style_bg_color(announceview, _retos->ui()->bg_color(),  LV_STATE_DEFAULT);
-    // lv_obj_set_style_bg_color(statusview, _retos->ui()->bg_color(),  LV_STATE_DEFAULT);
+    lv_obj_set_size(statusview, lv_pct(100), lv_pct(100));
+    lv_obj_set_style_pad_all(statusview, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
 
     lv_obj_t *tabview_btns = lv_tabview_get_tab_btns(tabview);
     lv_obj_set_style_border_width(tabview_btns, 1, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_border_color(tabview_btns, _retos->ui()->fg_color(), LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_border_side(tabview_btns, LV_BORDER_SIDE_TOP, LV_STATE_DEFAULT);
 
+    // Cache data and reset pagination
+    _conversation_page = 0;
+    _announce_page = 0;
 
-    set<ConversationMetaInfo> *conversations = getAllConversationInfo();
-    if(conversations->size() == 0) {
-        lv_obj_t *label2 = lv_label_create(msgview);
-        lv_obj_set_size(label2, LV_SIZE_CONTENT,LV_SIZE_CONTENT);
-        lv_obj_set_align(label2, LV_ALIGN_CENTER);
-        lv_obj_set_style_text_color(label2, _retos->ui()->fg_color(), LV_PART_MAIN | LV_STATE_DEFAULT);
-        lv_obj_set_style_text_opa(label2, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
-        lv_label_set_text(label2, "No Conversations");
-    } else {
-        conversation_list_lookup.clear();
-        conversation_list_lookup.reserve(conversations->size());
-
-        lv_obj_t * list = lv_list_create(msgview);
-        lv_obj_set_size(list, lv_pct(100), lv_pct(100));
-        lv_obj_set_style_border_width(list, 1, LV_PART_MAIN | LV_STATE_DEFAULT);
-        lv_obj_set_style_border_color(list, _retos->ui()->fg_color(), LV_PART_MAIN | LV_STATE_DEFAULT);
-
-        uint16_t i = 0;
-        for(const ConversationMetaInfo &cmi : *conversations) {
-            string display_name = cmi.their_name.empty() ?
-                cmi.their_hash.toHex().substr(0,12) + "..." : cmi.their_name;
-            string display = display_name + "\n" + formatRelativeTime(cmi.last_message_at);
-
-            conversation_list_lookup.push_back(cmi.their_hash);
-            lv_obj_t* btn = lv_list_add_btn(list, LV_SYMBOL_EDIT, display.c_str());
-            lv_obj_set_style_pad_all(btn, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-            lv_obj_add_event_cb(btn, conversation_click_callback, LV_EVENT_CLICKED, (void*)i++);
-        }
+    // Copy conversations to vector for pagination
+    set<ConversationMetaInfo> *conversations_ptr = getAllConversationInfo();
+    _conversations_cache.clear();
+    _conversations_cache.reserve(conversations_ptr->size());
+    for(const auto &c : *conversations_ptr) {
+        _conversations_cache.push_back(c);
     }
 
-    const set<AnnounceData> *announces = getAnnounceData();
-    if(announces->size() == 0) {
-        lv_obj_t *label2 = lv_label_create(announceview);
-        lv_obj_set_size(label2, LV_SIZE_CONTENT,LV_SIZE_CONTENT);   /// 1
-        lv_obj_set_align(label2, LV_ALIGN_CENTER);
-        lv_obj_set_style_text_color(label2, _retos->ui()->fg_color(), LV_PART_MAIN | LV_STATE_DEFAULT);
-        lv_obj_set_style_text_opa(label2, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
-        lv_label_set_text(label2, "No Announces");
-    } else {
-        announce_list_lookup.clear();
-        announce_list_lookup.reserve(announces->size());
-
-        lv_obj_t * list = lv_list_create(announceview);
-        lv_obj_set_size(list, lv_pct(100), lv_pct(100));
-        lv_obj_set_style_border_width(list, 1, LV_PART_MAIN | LV_STATE_DEFAULT);
-        lv_obj_set_style_border_color(list, _retos->ui()->fg_color(), LV_PART_MAIN | LV_STATE_DEFAULT);
-
-        uint16_t i = 0;
-        for(const AnnounceData &ad: *announces) {
-            string dn = ad.displayName() + "\n" + formatRelativeTime(ad.last_heard);
-            announce_list_lookup.push_back(ad.dest);
-            lv_obj_t* btn = lv_list_add_btn(list, LV_SYMBOL_EDIT, dn.c_str());
-            lv_obj_set_style_pad_all(btn, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-            lv_obj_add_event_cb(btn, announce_click_callback, LV_EVENT_CLICKED, (void*)i++);
-        }
+    // Copy announces to vector for pagination
+    const set<AnnounceData> *announces_ptr = getAnnounceData();
+    _announces_cache.clear();
+    _announces_cache.reserve(announces_ptr->size());
+    for(const auto &a : *announces_ptr) {
+        _announces_cache.push_back(a);
     }
+
+    // Render the lists
+    renderConversationList();
+    renderAnnounceList();
 
     // Status tab - show identity and network info
     lv_obj_set_flex_flow(statusview, LV_FLEX_FLOW_COLUMN);
@@ -372,6 +549,25 @@ void UChat::renderMainMenu() {
     lv_obj_set_style_text_color(queue_label, _retos->ui()->fg_color(), LV_PART_MAIN | LV_STATE_DEFAULT);
     string queue_text = "Queued msgs: " + std::to_string(_rns_service->queuedMsgs().size());
     lv_label_set_text(queue_label, queue_text.c_str());
+
+    // Spacer before announce button
+    lv_obj_t *spacer = lv_obj_create(statusview);
+    lv_obj_set_size(spacer, lv_pct(100), 10);
+    lv_obj_set_style_bg_opa(spacer, LV_OPA_TRANSP, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_border_width(spacer, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+
+    // Announce button
+    lv_obj_t *announce_btn = lv_btn_create(statusview);
+    lv_obj_set_size(announce_btn, lv_pct(80), 35);
+    lv_obj_set_style_border_width(announce_btn, 1, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_border_color(announce_btn, _retos->ui()->fg_color(), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_add_event_cb(announce_btn, announce_btn_callback, LV_EVENT_CLICKED, nullptr);
+    lv_group_add_obj(_retos->ui()->default_input_group(), announce_btn);
+
+    lv_obj_t *announce_btn_label = lv_label_create(announce_btn);
+    lv_label_set_text(announce_btn_label, LV_SYMBOL_WIFI " Announce");
+    lv_obj_set_style_text_color(announce_btn_label, _retos->ui()->fg_color(), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_center(announce_btn_label);
 
 }
 

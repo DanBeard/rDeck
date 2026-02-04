@@ -19,7 +19,8 @@ forward_list<AppInfo> apps= {
 
 forward_list<ServiceInfo> services = {
      ServiceFactory<GPSService>(),
-     ServiceFactory<RnsService>(), 
+     ServiceFactory<RnsService>(),
+     ServiceFactory<TimeService>(),
      };
 
 // main app that launches other apps

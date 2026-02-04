@@ -93,8 +93,11 @@ static uint8_t next_header_id() {
 /*virtual*/ void LoRaInterface::send_outgoing(const Bytes& data) {
     _rns_service->actionHappened();
 	DEBUG(toString() + ".on_outgoing: data: " + data.toHex());
+	Serial.print("[LORA TX] Transmitting ");
+	Serial.print(data.size());
+	Serial.println(" bytes");
 	try {
-		if (_online) { 
+		if (_online) {
 			TRACE("LoRaInterface: sending " + std::to_string(data.size()) + " bytes...");
 			// Send packet
             uint8_t header  = next_header_id(); //random(256) & 0xF0; <--- old code. But this should be faster and more predictable
@@ -109,6 +112,11 @@ static uint8_t next_header_id() {
                 memcpy(buf+1, data.data() + i, size);
 
                 int status = _lora->transmit(buf, size + LORA_HEADER_SIZE);
+                Serial.print("[LORA TX] transmit status=");
+                Serial.print(status);
+                Serial.print(" sent ");
+                Serial.print(size + LORA_HEADER_SIZE);
+                Serial.println(" bytes");
                 TRACE("LoRaInterface: status " + std::to_string(status) + " SENT " + std::to_string(size)+ " bytes (+ 1 header byte)........");
             }
            

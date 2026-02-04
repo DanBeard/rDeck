@@ -57,10 +57,10 @@ namespace Retcon::LXMF {
                             if(nameBin.size() > 0) {
                                 // this should add the /0 ... right?
                             return string((const char*)nameBin.data(), nameBin.size());
-                        } 
                         }
-                       
-                        
+                        }
+
+
                         if(doc[0].is<string>()) {
                             string nameStr = doc[0].as<string>();
                             if(nameStr.size() > 0) {
@@ -74,6 +74,30 @@ namespace Retcon::LXMF {
                 // if we can't find a name in app_data then just the hex *shrug*
                 return dest.toHex();
 
+            }
+
+            // Returns device type from app_data[2] if present
+            // Expected values: "rdeck", "companion-server", or empty string if unknown
+            string deviceType() const {
+                if (app_data.size() > 3 && ((app_data.data()[0] >= 0x90 && app_data.data()[0] <= 0x9f) || app_data.data()[0] == 0xdc)) {
+                    JsonDocument doc;
+                    deserializeMsgPack(doc, app_data.data(), app_data.size());
+                    if (doc.is<JsonArray>() && doc.size() > 2) {
+                        // device_type is at position [2]
+                        if (doc[2].is<string>()) {
+                            return doc[2].as<string>();
+                        }
+                    }
+                }
+                return "";
+            }
+
+            bool isRdeck() const {
+                return deviceType() == "rdeck";
+            }
+
+            bool isCompanionServer() const {
+                return deviceType() == "companion-server";
             }
     };
 

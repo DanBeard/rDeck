@@ -37,10 +37,42 @@ class AnnounceInfo:
     display_name: str
     app_data: bytes
     timestamp: float
+    device_type: Optional[str] = None  # "companion-server", "rdeck", or None for unknown
+    services: Optional[list[str]] = None  # Services offered (for companion servers)
+    identity: Any = None  # The announced RNS.Identity (needed to send messages back)
 
     @property
     def hash_hex(self) -> str:
         return self.destination_hash.hex()
+
+    @property
+    def is_companion_server(self) -> bool:
+        return self.device_type == "companion-server"
+
+    @property
+    def is_rdeck(self) -> bool:
+        return self.device_type == "rdeck"
+
+    @property
+    def is_known_type(self) -> bool:
+        return self.device_type is not None
+
+
+class AnnounceHandler:
+    """Handler for RNS announces.
+
+    RNS.Transport.register_announce_handler requires an object with:
+    - aspect_filter: str or None to filter announces by aspect
+    - received_announce(destination_hash, announced_identity, app_data): callback method
+    """
+
+    def __init__(self, callback: Callable[[bytes, Any, bytes], None], aspect_filter: Optional[str] = None):
+        self.aspect_filter = aspect_filter
+        self._callback = callback
+
+    def received_announce(self, destination_hash: bytes, announced_identity, app_data: bytes):
+        """Called when an announce is received."""
+        self._callback(destination_hash, announced_identity, app_data)
 
 
 class ReticulumService:
@@ -74,8 +106,21 @@ class ReticulumService:
         self._announces: dict[str, AnnounceInfo] = {}
 
     def start(self):
-        """Start the Reticulum service in a background thread."""
+        """Start the Reticulum service.
+
+        Initialization happens in the main thread (required for signal handlers),
+        then the event loop runs in a background thread.
+        """
         if self._running:
+            return
+
+        # Initialize in main thread (RNS.Reticulum needs to set signal handlers)
+        try:
+            self._initialize_reticulum()
+            self._log("Reticulum service started")
+        except Exception as e:
+            self._log(f"Reticulum initialization error: {e}")
+            logger.exception("Reticulum initialization error")
             return
 
         self._running = True
@@ -89,11 +134,8 @@ class ReticulumService:
             self._thread.join(timeout=5.0)
 
     def _run(self):
-        """Main service loop."""
+        """Background event loop."""
         try:
-            self._initialize_reticulum()
-            self._log("Reticulum service started")
-
             while self._running:
                 time.sleep(0.1)
 
@@ -102,11 +144,15 @@ class ReticulumService:
             logger.exception("Reticulum service error")
 
     def _initialize_reticulum(self):
-        """Initialize Reticulum, identity, and LXMF."""
-        # Initialize Reticulum
-        self._reticulum = RNS.Reticulum(
-            configdir=str(self.config.data_dir / "reticulum")
-        )
+        """Initialize Reticulum, identity, and LXMF.
+
+        Uses the system Reticulum config (~/.reticulum/) to share interfaces
+        with other Reticulum applications. Identity is still stored separately
+        in the companion server's data directory.
+        """
+        # Initialize Reticulum using system config (None = default ~/.reticulum/)
+        # This allows sharing interfaces with other RNS applications
+        self._reticulum = RNS.Reticulum(configdir=None)
 
         # Load or create identity
         identity_path = self.config.identity_path
@@ -127,44 +173,83 @@ class ReticulumService:
         # Register delivery callback
         self._lxmf_router.register_delivery_callback(self._on_lxmf_delivery)
 
-        # Get our LXMF destination
-        self._lxmf_destination = self._lxmf_router.get_delivery_destination()
+        # Register our identity for delivery and get the destination
+        self._lxmf_destination = self._lxmf_router.register_delivery_identity(
+            self._identity,
+            display_name=self.config.server_name,
+        )
         self._log(f"LXMF destination: {self._lxmf_destination.hash.hex()}")
 
-        # Register announce handler
-        RNS.Transport.register_announce_handler(self._on_announce)
+        # Register announce handler (RNS requires an object with aspect_filter and received_announce)
+        self._announce_handler = AnnounceHandler(self._on_announce, aspect_filter="lxmf.delivery")
+        RNS.Transport.register_announce_handler(self._announce_handler)
 
         # Announce ourselves
         self._announce()
 
     def _announce(self):
         """Announce our presence on the network."""
-        if not self._lxmf_destination:
+        if not self._lxmf_router or not self._identity or not self._lxmf_destination:
             return
 
-        # Build app_data like rDeck does: [name_binary, null]
+        # Build custom app_data with device type in extended format:
+        # [name_binary, stamp_cost_or_null, device_type]
         import msgpack
+        app_data = msgpack.packb([
+            self.config.server_name.encode("utf-8"),  # name as binary
+            None,  # stamp_cost = null
+            "companion-server",  # device_type identifier
+        ])
 
-        app_data = msgpack.packb([self.config.server_name.encode(), None])
+        # Announce with our custom app_data
         self._lxmf_destination.announce(app_data=app_data)
-        self._log(f"Announced as '{self.config.server_name}'")
+        self._log(f"Announced as '{self.config.server_name}' [companion-server] with services: {self.config.enabled_services}")
 
     def _on_announce(self, destination_hash: bytes, announced_identity, app_data: bytes):
         """Handle incoming announces."""
         try:
-            # Parse display name from app_data (msgpack: [name_binary, null])
+            # Parse app_data - standard LXMF format: [name_binary, stamp_cost_or_null]
             display_name = destination_hash.hex()[:12] + "..."
+            device_type = None
+            services = None
+
             if app_data:
                 try:
                     import msgpack
 
                     data = msgpack.unpackb(app_data, raw=False)
                     if isinstance(data, list) and len(data) > 0:
+                        # Parse name from position [0]
                         name = data[0]
                         if isinstance(name, bytes):
                             display_name = name.decode("utf-8", errors="replace")
                         elif isinstance(name, str):
                             display_name = name
+
+                        # Parse device_type from position [2] (extended format)
+                        # Format: [name_binary, stamp_cost_or_null, device_type]
+                        if len(data) > 2 and isinstance(data[2], str):
+                            device_type = data[2]
+                            if device_type == "companion-server":
+                                services = self.config.enabled_services  # Assume same services
+
+                        # Legacy fallback #1: detect device type from display name prefix
+                        # [CS] = companion-server, [rD] = rdeck
+                        if not device_type:
+                            if display_name.startswith("[CS] "):
+                                device_type = "companion-server"
+                                display_name = display_name[5:]  # Strip prefix for display
+                                services = self.config.enabled_services
+                            elif display_name.startswith("[rD] "):
+                                device_type = "rdeck"
+                                display_name = display_name[5:]  # Strip prefix for display
+
+                        # Legacy fallback #2: metadata dict in position [1]
+                        if not device_type and len(data) > 1 and isinstance(data[1], dict):
+                            metadata = data[1]
+                            device_type = metadata.get("type")
+                            if not services:
+                                services = metadata.get("services")
                 except Exception:
                     pass
 
@@ -173,6 +258,9 @@ class ReticulumService:
                 display_name=display_name,
                 app_data=app_data,
                 timestamp=time.time(),
+                device_type=device_type,
+                services=services,
+                identity=announced_identity,  # Store identity for sending messages back
             )
 
             # Store announce
@@ -185,7 +273,9 @@ class ReticulumService:
                 except Exception as e:
                     logger.exception(f"Announce callback error: {e}")
 
-            self._log(f"Received announce from '{display_name}' ({announce_info.hash_hex[:12]}...)")
+            # Log with type info if available
+            type_info = f" [{device_type}]" if device_type else ""
+            self._log(f"Received announce from '{display_name}'{type_info} ({announce_info.hash_hex[:12]}...)")
 
         except Exception as e:
             logger.exception(f"Error handling announce: {e}")
@@ -232,8 +322,17 @@ class ReticulumService:
 
         elif msg.msg_type == MessageType.NTP_REQUEST:
             # NTP time request
+            device = self.trust_manager.get_device(hash_hex)
+            device_name = device.name if device else hash_hex[:12] + "..."
+
+            # If we offered trust and they're sending requests, they've accepted
+            # Upgrade to mutual trust (handles case where TRUST_ACCEPT was lost)
+            if self.trust_manager.is_trust_pending(hash_hex):
+                self._log(f"[NTP] Device '{device_name}' sending request - upgrading to mutual trust")
+                self.trust_manager.accept_trust(hash_hex)
+
             if not self.trust_manager.is_mutually_trusted(hash_hex):
-                self._log(f"Rejected NTP request from untrusted device {hash_hex[:12]}...")
+                self._log(f"[NTP] Rejected request from untrusted '{device_name}'")
                 return
 
             payload: NTPRequestPayload = msg.payload
@@ -247,16 +346,27 @@ class ReticulumService:
                     request_id=msg.request_id,
                 ),
             )
-            self._log(f"Sent NTP response to {hash_hex[:12]}...")
+            from datetime import datetime
+            time_str = datetime.fromtimestamp(response.server_timestamp).strftime("%Y-%m-%d %H:%M:%S")
+            self._log(f"[NTP] Sent time to '{device_name}': {time_str}")
 
         elif msg.msg_type == MessageType.SEARCH_REQUEST:
             # Search request
+            device = self.trust_manager.get_device(hash_hex)
+            device_name = device.name if device else hash_hex[:12] + "..."
+
+            # If we offered trust and they're sending requests, they've accepted
+            # Upgrade to mutual trust (handles case where TRUST_ACCEPT was lost)
+            if self.trust_manager.is_trust_pending(hash_hex):
+                self._log(f"[Search] Device '{device_name}' sending request - upgrading to mutual trust")
+                self.trust_manager.accept_trust(hash_hex)
+
             if not self.trust_manager.is_mutually_trusted(hash_hex):
-                self._log(f"Rejected search request from untrusted device {hash_hex[:12]}...")
+                self._log(f"[Search] Rejected request from untrusted '{device_name}'")
                 return
 
             payload: SearchRequestPayload = msg.payload
-            self._log(f"Processing search: '{payload.query}'")
+            self._log(f"[Search] '{device_name}' searching: '{payload.query}'")
             response = self._search_service.handle_request(payload)
             self._send_service_message(
                 source_hash,
@@ -267,7 +377,10 @@ class ReticulumService:
                     request_id=msg.request_id,
                 ),
             )
-            self._log(f"Sent search response ({len(response.results)} results)")
+            if response.error:
+                self._log(f"[Search] Error for '{device_name}': {response.error}")
+            else:
+                self._log(f"[Search] Sent {len(response.results)} results to '{device_name}'")
 
     def send_trust_offer(self, destination_hash: str):
         """Send a trust offer to a device."""
@@ -306,22 +419,95 @@ class ReticulumService:
     def _send_service_message(self, destination_hash: bytes, msg: ServiceMessage):
         """Send a service message via LXMF."""
         if not self._lxmf_router:
+            self._log("Cannot send: LXMF router not initialized")
             return
 
         try:
             # Create LXMF message with service fields
             fields = encode_service_fields(msg)
+            hash_hex = destination_hash.hex()
 
-            lxm = LXMF.LXMessage(
-                destination_hash=destination_hash,
-                source_hash=self._lxmf_destination.hash,
-                content="",  # Service messages use fields, not content
-                fields=fields,
-            )
+            self._log(f"Creating LXMF message to {hash_hex[:12]}...")
 
+            # Try to get the identity from our announce cache or recall from RNS
+            announce_info = self._announces.get(hash_hex)
+            identity = None
+            if announce_info and announce_info.identity:
+                identity = announce_info.identity
+                self._log(f"Using cached identity from announce")
+            else:
+                # Try to recall from RNS identity cache
+                identity = RNS.Identity.recall(destination_hash)
+                if identity:
+                    self._log(f"Recalled identity from RNS cache")
+                else:
+                    self._log(f"WARNING: No identity found for {hash_hex[:12]}...")
+
+            # Create destination object if we have identity, otherwise fall back to hash
+            if identity:
+                destination = RNS.Destination(
+                    identity,
+                    RNS.Destination.OUT,
+                    RNS.Destination.SINGLE,
+                    "lxmf",
+                    "delivery"
+                )
+                self._log(f"Created destination object from identity")
+
+                lxm = LXMF.LXMessage(
+                    destination,
+                    self._lxmf_destination,
+                    "",  # content - Service messages use fields, not content
+                    fields=fields,
+                    desired_method=LXMF.LXMessage.DIRECT,  # Use link-based delivery
+                )
+            else:
+                # Fallback to hash-based creation (may not work without identity)
+                self._log(f"Falling back to destination_hash (may fail)")
+                lxm = LXMF.LXMessage(
+                    destination_hash=destination_hash,
+                    source_hash=self._lxmf_destination.hash,
+                    content="",
+                    fields=fields,
+                    desired_method=LXMF.LXMessage.DIRECT,
+                )
+
+            # Track delivery status
+            def on_delivered(message):
+                self._log(f"Message DELIVERED to {hash_hex[:12]}!")
+
+            def on_failed(message):
+                state_names = {
+                    LXMF.LXMessage.GENERATING: "GENERATING",
+                    LXMF.LXMessage.OUTBOUND: "OUTBOUND",
+                    LXMF.LXMessage.SENDING: "SENDING",
+                    LXMF.LXMessage.SENT: "SENT",
+                    LXMF.LXMessage.DELIVERED: "DELIVERED",
+                    LXMF.LXMessage.FAILED: "FAILED",
+                }
+                state_name = state_names.get(message.state, f"UNKNOWN({message.state})")
+                self._log(f"Message FAILED to {hash_hex[:12]}... (state: {state_name})")
+
+            lxm.register_delivery_callback(on_delivered)
+            lxm.register_failed_callback(on_failed)
+
+            self._log(f"Sending LXMF message (method: DIRECT)...")
             self._lxmf_router.handle_outbound(lxm)
 
+            # Log detailed state info
+            state_names = {
+                LXMF.LXMessage.GENERATING: "GENERATING",
+                LXMF.LXMessage.OUTBOUND: "OUTBOUND",
+                LXMF.LXMessage.SENDING: "SENDING",
+                LXMF.LXMessage.SENT: "SENT",
+                LXMF.LXMessage.DELIVERED: "DELIVERED",
+                LXMF.LXMessage.FAILED: "FAILED",
+            }
+            state_name = state_names.get(lxm.state, f"UNKNOWN({lxm.state})")
+            self._log(f"Message queued (state: {state_name}, method: {lxm.method})")
+
         except Exception as e:
+            self._log(f"Error sending service message: {e}")
             logger.exception(f"Error sending service message: {e}")
 
     def _log(self, message: str):

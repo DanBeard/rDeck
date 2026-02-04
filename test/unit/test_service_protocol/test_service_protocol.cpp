@@ -8,7 +8,10 @@
 
 #include <unity.h>
 #include <ArduinoJson.h>
+#include <string>
 #include "services/RnsUtils/ServiceProtocol.h"
+#include "services/RnsUtils/TrustedServers.h"
+#include "FS.h"
 
 using namespace Retcon::Service;
 
@@ -408,6 +411,445 @@ void test_cross_compat_full_message_structure(void) {
 }
 
 // ============================================================================
+// LXMF Message Flow Simulation Tests
+// These tests simulate receiving an LXMF message exactly as Python would send it
+// ============================================================================
+
+/**
+ * Simulate what Python's LXMF library produces when sending a service message.
+ *
+ * Python code:
+ *   fields = encode_service_fields(msg)  # {msg_type, service, payload, request_id}
+ *   lxm = LXMF.LXMessage(..., fields=fields)
+ *
+ * LXMF packs this as: [timestamp, title_bytes, content_bytes, fields_dict]
+ */
+void test_lxmf_payload_with_service_fields(void) {
+    // Step 1: Create the inner payload (what goes in fields["payload"])
+    TrustOfferPayload innerPayload;
+    innerPayload.server_name = "TestCompanionServer";
+    innerPayload.services.push_back("ntp");
+    innerPayload.services.push_back("search");
+
+    uint8_t innerPayloadBuf[256];
+    size_t innerPayloadLen = innerPayload.serialize(innerPayloadBuf, sizeof(innerPayloadBuf));
+
+    // Step 2: Create the fields dict (what Python puts in LXMF message)
+    JsonDocument fieldsDoc;
+    fieldsDoc["msg_type"] = 0x01;  // TRUST_OFFER
+    fieldsDoc["service"] = "trust";
+    fieldsDoc["request_id"] = 12345;
+    fieldsDoc["payload"] = MsgPackBinary(innerPayloadBuf, innerPayloadLen);
+
+    // Step 3: Create the full LXMF packed payload: [timestamp, title, content, fields]
+    JsonDocument lxmfPayload;
+    JsonArray arr = lxmfPayload.to<JsonArray>();
+    arr.add(1706825600);  // timestamp
+    arr.add(MsgPackBinary((const uint8_t*)"", 0));  // empty title
+    arr.add(MsgPackBinary((const uint8_t*)"", 0));  // empty content
+    arr.add(fieldsDoc);  // fields dict
+
+    // Serialize to msgpack (simulating wire format)
+    uint8_t lxmfBuf[512];
+    size_t lxmfLen = serializeMsgPack(lxmfPayload, lxmfBuf, sizeof(lxmfBuf));
+    TEST_ASSERT_TRUE(lxmfLen > 0);
+
+    // Step 4: Now simulate C++ receiving this - deserialize and extract fields
+    JsonDocument receivedDoc;
+    DeserializationError err = deserializeMsgPack(receivedDoc, lxmfBuf, lxmfLen);
+    TEST_ASSERT_TRUE(err == DeserializationError::Ok);
+
+    // Verify it's an array with at least 4 elements
+    TEST_ASSERT_TRUE(receivedDoc.is<JsonArray>());
+    TEST_ASSERT_TRUE(receivedDoc.size() >= 4);
+
+    // Extract fields (index 3)
+    JsonVariant fieldsVar = receivedDoc[3];
+    TEST_ASSERT_FALSE(fieldsVar.isNull());
+    TEST_ASSERT_TRUE(fieldsVar.is<JsonObject>());
+
+    // Copy to a JsonDocument for isServiceMessage check
+    JsonDocument fields;
+    fields.set(fieldsVar);
+
+    // Step 5: Verify service message detection works
+    TEST_ASSERT_TRUE(ServiceMessage::isServiceMessage(fields));
+
+    // Step 6: Parse the service message
+    ServiceMessage svcMsg = ServiceMessage::fromFields(fields);
+    TEST_ASSERT_EQUAL(MessageType::TRUST_OFFER, svcMsg.msg_type);
+    TEST_ASSERT_EQUAL_STRING("trust", svcMsg.service.c_str());
+    TEST_ASSERT_EQUAL(12345, svcMsg.request_id);
+    TEST_ASSERT_TRUE(svcMsg.payload.size() > 0);
+
+    // Step 7: Deserialize the inner payload
+    TrustOfferPayload decoded;
+    decoded.deserialize(svcMsg.payload.data(), svcMsg.payload.size());
+    TEST_ASSERT_EQUAL_STRING("TestCompanionServer", decoded.server_name.c_str());
+    TEST_ASSERT_EQUAL(2, decoded.services.size());
+    TEST_ASSERT_EQUAL_STRING("ntp", decoded.services[0].c_str());
+    TEST_ASSERT_EQUAL_STRING("search", decoded.services[1].c_str());
+}
+
+/**
+ * Test that we correctly detect when fields is NOT a service message.
+ * This simulates receiving a regular LXMF message (not from companion server).
+ */
+void test_lxmf_payload_without_service_fields(void) {
+    // Regular LXMF message: [timestamp, title, content, null or empty fields]
+    JsonDocument lxmfPayload;
+    JsonArray arr = lxmfPayload.to<JsonArray>();
+    arr.add(1706825600);
+    arr.add(MsgPackBinary((const uint8_t*)"Hello", 5));
+    arr.add(MsgPackBinary((const uint8_t*)"Message body", 12));
+    arr.add(nullptr);  // No fields
+
+    uint8_t buf[256];
+    size_t len = serializeMsgPack(lxmfPayload, buf, sizeof(buf));
+
+    JsonDocument receivedDoc;
+    deserializeMsgPack(receivedDoc, buf, len);
+
+    TEST_ASSERT_TRUE(receivedDoc.is<JsonArray>());
+    TEST_ASSERT_TRUE(receivedDoc.size() >= 4);
+
+    JsonVariant fieldsVar = receivedDoc[3];
+    // Fields should be null for regular messages
+    TEST_ASSERT_TRUE(fieldsVar.isNull());
+}
+
+/**
+ * Test LXMF message with empty fields dict (not a service message).
+ */
+void test_lxmf_payload_with_empty_fields(void) {
+    JsonDocument lxmfPayload;
+    JsonArray arr = lxmfPayload.to<JsonArray>();
+    arr.add(1706825600);
+    arr.add(MsgPackBinary((const uint8_t*)"Title", 5));
+    arr.add(MsgPackBinary((const uint8_t*)"Content", 7));
+
+    JsonDocument emptyFields;
+    emptyFields.to<JsonObject>();  // Empty object {}
+    arr.add(emptyFields);
+
+    uint8_t buf[256];
+    size_t len = serializeMsgPack(lxmfPayload, buf, sizeof(buf));
+
+    JsonDocument receivedDoc;
+    deserializeMsgPack(receivedDoc, buf, len);
+
+    JsonVariant fieldsVar = receivedDoc[3];
+    TEST_ASSERT_FALSE(fieldsVar.isNull());
+    TEST_ASSERT_TRUE(fieldsVar.is<JsonObject>());
+
+    JsonDocument fields;
+    fields.set(fieldsVar);
+
+    // Should NOT be detected as service message (missing msg_type and service)
+    TEST_ASSERT_FALSE(ServiceMessage::isServiceMessage(fields));
+}
+
+/**
+ * Test decoding NTP response as Python would send it.
+ */
+void test_lxmf_ntp_response_flow(void) {
+    // Inner payload
+    NTPResponsePayload innerPayload;
+    innerPayload.server_timestamp = 1706825600;
+    innerPayload.client_timestamp = 5000;
+
+    uint8_t innerBuf[64];
+    size_t innerLen = innerPayload.serialize(innerBuf, sizeof(innerBuf));
+
+    // Service message fields
+    JsonDocument fieldsDoc;
+    fieldsDoc["msg_type"] = 0x11;  // NTP_RESPONSE
+    fieldsDoc["service"] = "ntp";
+    fieldsDoc["request_id"] = 42;
+    fieldsDoc["payload"] = MsgPackBinary(innerBuf, innerLen);
+
+    // Full LXMF payload
+    JsonDocument lxmfPayload;
+    JsonArray arr = lxmfPayload.to<JsonArray>();
+    arr.add(1706825600);
+    arr.add(MsgPackBinary((const uint8_t*)"", 0));
+    arr.add(MsgPackBinary((const uint8_t*)"", 0));
+    arr.add(fieldsDoc);
+
+    uint8_t buf[256];
+    size_t len = serializeMsgPack(lxmfPayload, buf, sizeof(buf));
+
+    // Simulate receiving
+    JsonDocument receivedDoc;
+    deserializeMsgPack(receivedDoc, buf, len);
+
+    JsonDocument fields;
+    fields.set(receivedDoc[3]);
+
+    TEST_ASSERT_TRUE(ServiceMessage::isServiceMessage(fields));
+
+    ServiceMessage svcMsg = ServiceMessage::fromFields(fields);
+    TEST_ASSERT_EQUAL(MessageType::NTP_RESPONSE, svcMsg.msg_type);
+    TEST_ASSERT_EQUAL(42, svcMsg.request_id);
+
+    NTPResponsePayload decoded;
+    decoded.deserialize(svcMsg.payload.data(), svcMsg.payload.size());
+    TEST_ASSERT_EQUAL(1706825600, decoded.server_timestamp);
+    TEST_ASSERT_EQUAL(5000, decoded.client_timestamp);
+}
+
+/**
+ * Test decoding search response with results as Python would send it.
+ */
+void test_lxmf_search_response_flow(void) {
+    // Inner payload
+    SearchResponsePayload innerPayload;
+    innerPayload.query = "test query";
+    innerPayload.results.push_back({"Result 1", "https://example.com/1", "First result"});
+    innerPayload.results.push_back({"Result 2", "https://example.com/2", "Second result"});
+
+    uint8_t innerBuf[512];
+    size_t innerLen = innerPayload.serialize(innerBuf, sizeof(innerBuf));
+
+    // Service message fields
+    JsonDocument fieldsDoc;
+    fieldsDoc["msg_type"] = 0x21;  // SEARCH_RESPONSE
+    fieldsDoc["service"] = "search";
+    fieldsDoc["request_id"] = 999;
+    fieldsDoc["payload"] = MsgPackBinary(innerBuf, innerLen);
+
+    // Full LXMF payload
+    JsonDocument lxmfPayload;
+    JsonArray arr = lxmfPayload.to<JsonArray>();
+    arr.add(1706825600);
+    arr.add(MsgPackBinary((const uint8_t*)"", 0));
+    arr.add(MsgPackBinary((const uint8_t*)"", 0));
+    arr.add(fieldsDoc);
+
+    uint8_t buf[1024];
+    size_t len = serializeMsgPack(lxmfPayload, buf, sizeof(buf));
+
+    // Simulate receiving
+    JsonDocument receivedDoc;
+    deserializeMsgPack(receivedDoc, buf, len);
+
+    JsonDocument fields;
+    fields.set(receivedDoc[3]);
+
+    TEST_ASSERT_TRUE(ServiceMessage::isServiceMessage(fields));
+
+    ServiceMessage svcMsg = ServiceMessage::fromFields(fields);
+    TEST_ASSERT_EQUAL(MessageType::SEARCH_RESPONSE, svcMsg.msg_type);
+
+    SearchResponsePayload decoded;
+    decoded.deserialize(svcMsg.payload.data(), svcMsg.payload.size());
+    TEST_ASSERT_EQUAL_STRING("test query", decoded.query.c_str());
+    TEST_ASSERT_EQUAL(2, decoded.results.size());
+    TEST_ASSERT_EQUAL_STRING("Result 1", decoded.results[0].title.c_str());
+    TEST_ASSERT_EQUAL_STRING("https://example.com/2", decoded.results[1].url.c_str());
+}
+
+/**
+ * Test that fields with only msg_type (missing service) is not detected as service message.
+ */
+void test_partial_fields_not_service_message(void) {
+    JsonDocument fields;
+    fields["msg_type"] = 0x01;
+    // Missing "service" field
+
+    TEST_ASSERT_FALSE(ServiceMessage::isServiceMessage(fields));
+}
+
+/**
+ * Test that fields with only service (missing msg_type) is not detected as service message.
+ */
+void test_partial_fields_missing_msg_type(void) {
+    JsonDocument fields;
+    fields["service"] = "trust";
+    // Missing "msg_type" field
+
+    TEST_ASSERT_FALSE(ServiceMessage::isServiceMessage(fields));
+}
+
+// ============================================================================
+// Full Integration Test: LXMF → ServiceMessage → TrustedServers
+// ============================================================================
+
+/**
+ * Test the complete flow from receiving an LXMF trust offer to storing in TrustedServers.
+ * This simulates exactly what happens in RnsService::onLinkPacket → handleServiceMessage → handleTrustOffer
+ */
+void test_full_trust_offer_integration(void) {
+    // Setup: Create test filesystem and TrustedServers instance
+    char dirTemplate[] = "/tmp/test_integration_XXXXXX";
+    char* testDir = mkdtemp(dirTemplate);
+    TEST_ASSERT_NOT_NULL(testDir);
+
+    FS testFs(testDir);
+    TrustedServers servers;
+    servers.init(&testFs);
+
+    // Verify empty initially
+    TEST_ASSERT_EQUAL(0, servers.getPendingOffers().size());
+
+    // Step 1: Simulate Python server creating TRUST_OFFER
+    TrustOfferPayload innerPayload;
+    innerPayload.server_name = "HomeCompanionServer";
+    innerPayload.services.push_back("ntp");
+    innerPayload.services.push_back("search");
+
+    uint8_t innerBuf[256];
+    size_t innerLen = innerPayload.serialize(innerBuf, sizeof(innerBuf));
+
+    // Step 2: Create LXMF fields (as Python does)
+    JsonDocument fieldsDoc;
+    fieldsDoc["msg_type"] = static_cast<uint8_t>(MessageType::TRUST_OFFER);
+    fieldsDoc["service"] = "trust";
+    fieldsDoc["request_id"] = 99999;
+    fieldsDoc["payload"] = MsgPackBinary(innerBuf, innerLen);
+
+    // Step 3: Create full LXMF packed payload
+    JsonDocument lxmfPayload;
+    JsonArray arr = lxmfPayload.to<JsonArray>();
+    arr.add(1706825600);
+    arr.add(MsgPackBinary((const uint8_t*)"", 0));
+    arr.add(MsgPackBinary((const uint8_t*)"", 0));
+    arr.add(fieldsDoc);
+
+    uint8_t lxmfBuf[512];
+    size_t lxmfLen = serializeMsgPack(lxmfPayload, lxmfBuf, sizeof(lxmfBuf));
+
+    // Step 4: Simulate RnsService receiving this (onLinkPacket logic)
+    JsonDocument receivedDoc;
+    deserializeMsgPack(receivedDoc, lxmfBuf, lxmfLen);
+
+    TEST_ASSERT_TRUE(receivedDoc.is<JsonArray>());
+    TEST_ASSERT_TRUE(receivedDoc.size() >= 4);
+
+    JsonVariant fieldsVar = receivedDoc[3];
+    TEST_ASSERT_FALSE(fieldsVar.isNull());
+    TEST_ASSERT_TRUE(fieldsVar.is<JsonObject>());
+
+    JsonDocument fields;
+    fields.set(fieldsVar);
+
+    // Step 5: Check if service message (as in onLinkPacket)
+    TEST_ASSERT_TRUE(ServiceMessage::isServiceMessage(fields));
+
+    // Step 6: Parse ServiceMessage (as in handleServiceMessage)
+    ServiceMessage svcMsg = ServiceMessage::fromFields(fields);
+    TEST_ASSERT_EQUAL(MessageType::TRUST_OFFER, svcMsg.msg_type);
+
+    // Step 7: Deserialize TrustOfferPayload (as in handleTrustOffer)
+    TrustOfferPayload decoded;
+    decoded.deserialize(svcMsg.payload.data(), svcMsg.payload.size());
+    TEST_ASSERT_EQUAL_STRING("HomeCompanionServer", decoded.server_name.c_str());
+
+    // Step 8: Store in TrustedServers (as in handleTrustOffer)
+    RNS::Bytes sourceHash;
+    sourceHash.assignHex("abcd1234abcd1234abcd1234abcd1234");
+
+    servers.addPendingOffer(sourceHash, decoded.server_name, decoded.services);
+
+    // Step 9: Verify it was stored correctly
+    auto pending = servers.getPendingOffers();
+    TEST_ASSERT_EQUAL(1, pending.size());
+    TEST_ASSERT_EQUAL_STRING("HomeCompanionServer", pending[0].name.c_str());
+    TEST_ASSERT_EQUAL(2, pending[0].services.size());
+    TEST_ASSERT_EQUAL_STRING("ntp", pending[0].services[0].c_str());
+    TEST_ASSERT_EQUAL_STRING("search", pending[0].services[1].c_str());
+    TEST_ASSERT_EQUAL(TrustStatus::PENDING, pending[0].status);
+
+    // Step 10: Verify persistence by reloading
+    TrustedServers newServers;
+    newServers.init(&testFs);
+
+    auto reloaded = newServers.getPendingOffers();
+    TEST_ASSERT_EQUAL(1, reloaded.size());
+    TEST_ASSERT_EQUAL_STRING("HomeCompanionServer", reloaded[0].name.c_str());
+
+    // Cleanup
+    std::string filePath = std::string(testDir) + "/trusted_servers.json";
+    remove(filePath.c_str());
+    rmdir(testDir);
+}
+
+/**
+ * Test accepting a trust offer and the full flow.
+ */
+void test_full_trust_accept_flow(void) {
+    char dirTemplate[] = "/tmp/test_accept_XXXXXX";
+    char* testDir = mkdtemp(dirTemplate);
+    TEST_ASSERT_NOT_NULL(testDir);
+
+    FS testFs(testDir);
+    TrustedServers servers;
+    servers.init(&testFs);
+
+    // Add a pending offer
+    RNS::Bytes serverHash;
+    serverHash.assignHex("fedcba9876543210fedcba9876543210");
+
+    std::vector<std::string> svc = {"ntp", "search"};
+    servers.addPendingOffer(serverHash, "TestServer", svc);
+
+    // Verify pending
+    TEST_ASSERT_TRUE(servers.hasPendingOffer("fedcba9876543210fedcba9876543210"));
+    TEST_ASSERT_FALSE(servers.isTrusted(std::string("fedcba9876543210fedcba9876543210")));
+
+    // Accept the offer
+    bool accepted = servers.acceptOffer("fedcba9876543210fedcba9876543210");
+    TEST_ASSERT_TRUE(accepted);
+
+    // Verify trusted
+    TEST_ASSERT_FALSE(servers.hasPendingOffer("fedcba9876543210fedcba9876543210"));
+    TEST_ASSERT_TRUE(servers.isTrusted(std::string("fedcba9876543210fedcba9876543210")));
+
+    // Verify services preserved
+    const TrustedServer* server = servers.getServer("fedcba9876543210fedcba9876543210");
+    TEST_ASSERT_NOT_NULL(server);
+    TEST_ASSERT_EQUAL(2, server->services.size());
+
+    // Cleanup
+    std::string filePath = std::string(testDir) + "/trusted_servers.json";
+    remove(filePath.c_str());
+    rmdir(testDir);
+}
+
+/**
+ * Simulate Python sending binary strings (use_bin_type=True).
+ * Python's msgpack with use_bin_type=True encodes strings as bin, not str.
+ * ArduinoJson should handle both.
+ */
+void test_decode_python_binary_strings(void) {
+    // Python with use_bin_type=True would encode server_name as binary
+    // Let's verify ArduinoJson's MsgPackBinary handling works
+
+    JsonDocument doc;
+    // Simulate Python encoding {"server_name": b"TestServer", "services": [b"ntp"]}
+    doc["server_name"] = MsgPackBinary((const uint8_t*)"TestServer", 10);
+    JsonArray svc = doc["services"].to<JsonArray>();
+    svc.add(MsgPackBinary((const uint8_t*)"ntp", 3));
+
+    uint8_t buf[128];
+    size_t len = serializeMsgPack(doc, buf, sizeof(buf));
+
+    // Now deserialize and verify our safeGetString helper would work
+    JsonDocument decoded;
+    deserializeMsgPack(decoded, buf, len);
+
+    // Check that we can read binary as string
+    if (decoded["server_name"].is<MsgPackBinary>()) {
+        MsgPackBinary bin = decoded["server_name"].as<MsgPackBinary>();
+        std::string name((const char*)bin.data(), bin.size());
+        TEST_ASSERT_EQUAL_STRING("TestServer", name.c_str());
+    } else {
+        // ArduinoJson might auto-convert, which is also fine
+        TEST_ASSERT_EQUAL_STRING("TestServer", decoded["server_name"].as<const char*>());
+    }
+}
+
+// ============================================================================
 // Test Runner
 // ============================================================================
 
@@ -459,6 +901,20 @@ int main(int argc, char **argv) {
     RUN_TEST(test_cross_compat_trust_offer_encoding);
     RUN_TEST(test_cross_compat_ntp_response_encoding);
     RUN_TEST(test_cross_compat_full_message_structure);
+
+    // LXMF message flow simulation tests
+    RUN_TEST(test_lxmf_payload_with_service_fields);
+    RUN_TEST(test_lxmf_payload_without_service_fields);
+    RUN_TEST(test_lxmf_payload_with_empty_fields);
+    RUN_TEST(test_lxmf_ntp_response_flow);
+    RUN_TEST(test_lxmf_search_response_flow);
+    RUN_TEST(test_partial_fields_not_service_message);
+    RUN_TEST(test_partial_fields_missing_msg_type);
+    RUN_TEST(test_decode_python_binary_strings);
+
+    // Full integration tests
+    RUN_TEST(test_full_trust_offer_integration);
+    RUN_TEST(test_full_trust_accept_flow);
 
     return UNITY_END();
 }

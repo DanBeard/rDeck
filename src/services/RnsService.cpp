@@ -1,4 +1,5 @@
 #include "RnsService.h"
+#include "TimeService.h"
 #include "lvgl.h"
 #include "RnsUtils/LoraInterface.h"
 #include "Bytes.h"
@@ -78,7 +79,8 @@ static void onLinkPacket(const RNS::Bytes& plaintext, const RNS::Packet& packet)
 }
 static void onLink(RNS::Link& link) {
     rnsService->reticulum.should_persist_data();
-    Serial.println("LINK ESTABLISHED!");
+    Serial.println("[RNS] *** LINK ESTABLISHED ***");
+    Serial.printf("[RNS] Link from: %s\n", link.destination().hash().toHex().c_str());
     link.set_packet_callback(onLinkPacket);
 }
 
@@ -239,18 +241,18 @@ void RnsService::saveUserInfo() {
 void RnsService::announce() {
     if (lxmf_delivery_src) {
 		HEAD("Announcing destination...", RNS::LOG_TRACE);
-		//destination.announce(RNS::bytesFromString(fruits[RNS::Cryptography::randomnum() % 7]));
-		// test path
-		//destination.announce(RNS::bytesFromString(fruits[RNS::Cryptography::randomnum() % 7]), true, nullptr, RNS::bytesFromString("test_tag"));
-		// test packet send
         uint8_t buffer[200];
         JsonDocument doc;
-        // throw together the name
+
+        // Build announce app_data in extended LXMF format: [name_binary, stamp_cost_or_null, device_type]
+        // - name_binary: display name as msgpack binary
+        // - stamp_cost: null (no stamp required)
+        // - device_type: "rdeck" to identify this as an rDeck device
         const char * name = userInfo["name"];
-        doc.add(MsgPackBinary(name,strnlen(name,100)));
-        //doc.add("RDECK STR");
-        doc.add(nullptr);
-        //doc.add("rand?");
+        doc.add(MsgPackBinary(name, strnlen(name, 100)));
+        doc.add(nullptr);  // stamp_cost = null (standard LXMF format)
+        doc.add("rdeck");  // device_type identifier
+
         size_t bytesWritten = serializeMsgPack(doc, buffer, 200);
         Serial.println("ANNOUNCE MSGPACK-------");
         Serial.println(name);
@@ -277,6 +279,7 @@ void RnsService::processNextInQueue() {
 }
 
 static unsigned long last_announce = 0;
+
 void RnsService::tick(const unsigned long tMillis) {
     // TODO TEMP FOR TESTING REMOVE ME OR MAKE MUCH LONGER OR VIA CONFIG
     if(tMillis - last_announce > (10*60*1000) || tMillis < last_announce){
@@ -285,6 +288,7 @@ void RnsService::tick(const unsigned long tMillis) {
         last_announce = tMillis;
         reticulum.should_persist_data();
     }
+
     reticulum.loop();
     lora_interface_impl->tick(lora_interface);
 
@@ -665,13 +669,22 @@ void RnsService::handleServiceMessage(const Retcon::Service::ServiceMessage& msg
         }
 
         case Retcon::Service::MessageType::NTP_RESPONSE: {
+            Serial.printf("[Service] NTP_RESPONSE received from %s\n", sourceHash.toHex().c_str());
+
             // Only accept from trusted servers
-            if (!Retcon::Service::getTrustedServers().isTrusted(sourceHash)) {
+            bool trusted = Retcon::Service::getTrustedServers().isTrusted(sourceHash);
+            Serial.printf("[Service] Source trusted: %s\n", trusted ? "YES" : "NO");
+
+            if (!trusted) {
                 Serial.println("[Service] Ignoring NTP response from untrusted server");
                 return;
             }
+
+            Serial.printf("[Service] Deserializing NTP payload (%d bytes)\n", msg.payload.size());
             Retcon::Service::NTPResponsePayload payload;
             payload.deserialize(msg.payload.data(), msg.payload.size());
+            Serial.printf("[Service] NTP payload: server_time=%u, client_time=%u\n",
+                          payload.server_timestamp, payload.client_timestamp);
             handleNtpResponse(payload);
             break;
         }
@@ -712,22 +725,13 @@ void RnsService::handleTrustOffer(const Retcon::Service::TrustOfferPayload& payl
 }
 
 void RnsService::handleNtpResponse(const Retcon::Service::NTPResponsePayload& payload) {
-    Serial.printf("[Service] Received NTP_RESPONSE: server_time=%u, client_time=%u\n",
-                  payload.server_timestamp, payload.client_timestamp);
-
-    // Calculate RTT if we have a matching request
-    uint32_t now = (uint32_t)(millis() & 0xFFFFFFFF);
-    uint32_t rtt = now - payload.client_timestamp;
-
-    Serial.printf("[Service] RTT: %u ms\n", rtt);
-
-    // Apply time with RTT compensation (assume symmetric latency)
-    time_t adjusted_time = payload.server_timestamp + (rtt / 2000);  // Convert ms to seconds
-
-    // Set time using TimeHelper with RETICULUM_NTP source
-    _retos->time.setTime(adjusted_time, TimeSource::RETICULUM_NTP);
-
-    Serial.printf("[Service] Time synchronized to %lu (adjusted for RTT)\n", adjusted_time);
+    // Delegate to TimeService for centralized time management
+    TimeService* timeService = _retos->fetchService<TimeService>();
+    if (timeService) {
+        timeService->handleNtpResponse(payload.server_timestamp, payload.client_timestamp);
+    } else {
+        Serial.println("[Service] Warning: TimeService not found, cannot process NTP response");
+    }
 }
 
 void RnsService::handleSearchResponse(const Retcon::Service::SearchResponsePayload& payload, uint32_t requestId) {

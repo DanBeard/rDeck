@@ -69,6 +69,13 @@ class TrustItem(Static):
             super().__init__()
             self.device = device
 
+    class ResendClicked(Message):
+        """Message sent when resend button is clicked."""
+
+        def __init__(self, device: TrustedDevice):
+            super().__init__()
+            self.device = device
+
     def __init__(self, device: TrustedDevice, **kwargs):
         super().__init__(**kwargs)
         self.device = device
@@ -83,11 +90,17 @@ class TrustItem(Static):
             status_class = "status " + self.device.status.value
             yield Label(status_text, classes=status_class)
 
+        # Show Resend button for pending devices
+        if self.device.status == TrustStatus.OFFERED:
+            yield Button("Resend", id=f"resend-{self.device.hash[:8]}", variant="primary")
         yield Button("Revoke", id=f"revoke-{self.device.hash[:8]}")
 
     def on_button_pressed(self, event: Button.Pressed):
-        """Handle revoke button press."""
-        self.post_message(self.RevokeClicked(self.device))
+        """Handle button presses."""
+        if event.button.id and event.button.id.startswith("resend-"):
+            self.post_message(self.ResendClicked(self.device))
+        elif event.button.id and event.button.id.startswith("revoke-"):
+            self.post_message(self.RevokeClicked(self.device))
 
 
 class TrustView(Widget):
@@ -123,13 +136,21 @@ class TrustView(Widget):
             super().__init__()
             self.hash_hex = hash_hex
 
+    class ResendRequested(Message):
+        """Message sent when user requests to resend a trust offer."""
+
+        def __init__(self, hash_hex: str, name: str):
+            super().__init__()
+            self.hash_hex = hash_hex
+            self.name = name
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._devices: list[TrustedDevice] = []
 
     def compose(self) -> ComposeResult:
         with ScrollableContainer():
-            yield Static("No trusted devices", classes="empty", id="empty-msg")
+            yield Static("No trusted devices", classes="empty")
 
     def update_devices(self, devices: list[TrustedDevice]):
         """Update the devices list."""
@@ -140,12 +161,13 @@ class TrustView(Widget):
         """Refresh the device list."""
         container = self.query_one(ScrollableContainer)
 
-        # Clear existing items
-        for child in list(container.children):
+        # Clear existing items - collect first, then remove
+        children_to_remove = list(container.children)
+        for child in children_to_remove:
             child.remove()
 
         if not self._devices:
-            container.mount(Static("No trusted devices", classes="empty", id="empty-msg"))
+            container.mount(Static("No trusted devices", classes="empty"))
             return
 
         # Separate mutual and pending
@@ -167,3 +189,7 @@ class TrustView(Widget):
     def on_trust_item_revoke_clicked(self, message: TrustItem.RevokeClicked):
         """Handle revoke click from trust item."""
         self.post_message(self.RevokeRequested(message.device.hash))
+
+    def on_trust_item_resend_clicked(self, message: TrustItem.ResendClicked):
+        """Handle resend click from trust item."""
+        self.post_message(self.ResendRequested(message.device.hash, message.device.name))
