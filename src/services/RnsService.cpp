@@ -1,7 +1,9 @@
 #include "RnsService.h"
+#include "WifiService.h"
 #include "TimeService.h"
 #include "lvgl.h"
 #include "RnsUtils/LoraInterface.h"
+#include "RnsUtils/TCPClientInterface.h"
 #include "Bytes.h"
 #include "apps/Settings.h"
 #include "RnsUtils/LXMFData.h"
@@ -16,6 +18,7 @@ RnsService::RnsService(uint8_t id): reticulum({RNS::Type::NONE}),
  lxmf_delivery_src({RNS::Type::NONE}),
   rns_fs({RNS::Type::NONE}),
   lora_interface({RNS::Type::NONE}),
+  tcp_interface({RNS::Type::NONE}),
    BaseService(id) {
     // make sure there's only 1
     assert(rnsService == nullptr);
@@ -94,30 +97,27 @@ void RnsService::start(RetOS* retos){
     _lora = hal.lora;
     _fs = hal.fs;
 
-    lora_interface_impl = new RNS::Interfaces::LoRaInterface(_lora, this);
-    lora_interface = RNS::Interface(lora_interface_impl);
+    // Setup RNS filesystem
     rns_fs = new FileSystem();
     ((FileSystem*)rns_fs.get())->init();
     RNS::Utilities::OS::register_filesystem(rns_fs);
 
-    lora_interface.mode(RNS::Type::Interface::MODE_GATEWAY);
-	RNS::Transport::register_interface(lora_interface);
+    // Check if WiFi mode is enabled
+    JsonObject netSettings = Settings::getSettings(WifiService::settingsSection);
+    bool useWifi = netSettings["enabled"] | false;
+    const char* tcpHost = netSettings["tcp_host"] | "";
+    uint16_t tcpPort = netSettings["tcp_port"] | 4242;
+    bool tcpConfigured = strlen(tcpHost) > 0;
 
-    // TODO merge with settings config
-    LoraConfig config {
-        .frequency =  914.875F,
-        .bandwidth =  250.000F,
-        .sf = 7,
-        .cr = 5,
-        .power = 19,
-        .preamble_len = 8,
-        .crc = 0,
-        .explicitHeader = true
-    };
-    // merge any changes the user has mad
-    mergeLoraSettings(config);
-
-    lora_interface_impl->start(config);
+    if (useWifi && tcpConfigured) {
+        Serial.println("[RNS] WiFi mode enabled, using TCP interface");
+        _interfaceMode = InterfaceMode::TCP;
+        initTcpInterface();
+    } else {
+        Serial.println("[RNS] Using LoRa interface");
+        _interfaceMode = InterfaceMode::LORA;
+        initLoraInterface();
+    }
 
     reticulum = RNS::Reticulum();
 
@@ -232,6 +232,66 @@ void RnsService::start(RetOS* retos){
 
 }
 
+void RnsService::initLoraInterface() {
+    Serial.println("[RNS] Initializing LoRa interface...");
+
+    lora_interface_impl = new RNS::Interfaces::LoRaInterface(_lora, this);
+    lora_interface = RNS::Interface(lora_interface_impl);
+
+    lora_interface.mode(RNS::Type::Interface::MODE_GATEWAY);
+    RNS::Transport::register_interface(lora_interface);
+
+    // Default LoRa config
+    LoraConfig config {
+        .frequency =  914.875F,
+        .bandwidth =  250.000F,
+        .sf = 7,
+        .cr = 5,
+        .power = 19,
+        .preamble_len = 8,
+        .crc = 0,
+        .explicitHeader = true
+    };
+    // Merge any user-configured changes
+    mergeLoraSettings(config);
+
+    lora_interface_impl->start(config);
+    Serial.println("[RNS] LoRa interface initialized");
+}
+
+void RnsService::initTcpInterface() {
+    Serial.println("[RNS] Initializing TCP interface...");
+
+    JsonObject netSettings = Settings::getSettings(WifiService::settingsSection);
+    const char* tcpHost = netSettings["tcp_host"] | "";
+    uint16_t tcpPort = netSettings["tcp_port"] | 4242;
+
+    tcp_interface_impl = new RNS::Interfaces::TCPClientInterface(this);
+    tcp_interface = RNS::Interface(tcp_interface_impl);
+
+    tcp_interface.mode(RNS::Type::Interface::MODE_GATEWAY);
+    RNS::Transport::register_interface(tcp_interface);
+
+    // Check if WiFi is already connected
+    WifiService* wifiSvc = _retos->fetchService<WifiService>();
+    if (wifiSvc && wifiSvc->isConnected()) {
+        Serial.printf("[RNS] WiFi connected, starting TCP connection to %s:%d\n", tcpHost, tcpPort);
+        tcp_interface_impl->start(tcpHost, tcpPort);
+    } else {
+        Serial.println("[RNS] WiFi not connected yet, TCP interface will connect when WiFi is ready");
+    }
+
+    Serial.println("[RNS] TCP interface initialized");
+}
+
+bool RnsService::isInterfaceOnline() const {
+    if (_interfaceMode == InterfaceMode::TCP) {
+        return tcp_interface_impl && tcp_interface_impl->isConnected();
+    } else {
+        return lora_interface_impl && lora_interface.online();
+    }
+}
+
 void RnsService::saveUserInfo() {
     File config_file = _fs->open("/reticulum/userinfo.json", FILE_WRITE, true);
     serializeJsonPretty(userInfo, config_file);
@@ -260,8 +320,11 @@ void RnsService::announce() {
             Serial.print((int)buffer[i]); Serial.print(',');
         }
         Serial.println("\n END ANNOUNCE MSGPACK-------");
-        TRACE("LoRaInterface: announce bytes written = " + std::to_string(bytesWritten) + " ........");
-		lxmf_delivery_src.announce(RNS::bytesFromChunk(buffer, bytesWritten), false, lora_interface);
+        TRACE("Interface: announce bytes written = " + std::to_string(bytesWritten) + " ........");
+
+        // Use the active interface
+        RNS::Interface& activeInterface = (_interfaceMode == InterfaceMode::TCP) ? tcp_interface : lora_interface;
+		lxmf_delivery_src.announce(RNS::bytesFromChunk(buffer, bytesWritten), false, activeInterface);
 	}
 }
 
@@ -281,7 +344,7 @@ void RnsService::processNextInQueue() {
 static unsigned long last_announce = 0;
 
 void RnsService::tick(const unsigned long tMillis) {
-    // TODO TEMP FOR TESTING REMOVE ME OR MAKE MUCH LONGER OR VIA CONFIG
+    // Periodic announce
     if(tMillis - last_announce > (10*60*1000) || tMillis < last_announce){
         Serial.println("RNS ANNOUNCE");
         announce();
@@ -290,7 +353,28 @@ void RnsService::tick(const unsigned long tMillis) {
     }
 
     reticulum.loop();
-    lora_interface_impl->tick(lora_interface);
+
+    // Tick the active interface
+    if (_interfaceMode == InterfaceMode::TCP) {
+        if (tcp_interface_impl) {
+            // Check if WiFi connected and TCP needs to start
+            WifiService* wifiSvc = _retos->fetchService<WifiService>();
+            if (wifiSvc && wifiSvc->isConnected() && !tcp_interface_impl->isConnected()) {
+                JsonObject netSettings = Settings::getSettings(WifiService::settingsSection);
+                const char* tcpHost = netSettings["tcp_host"] | "";
+                uint16_t tcpPort = netSettings["tcp_port"] | 4242;
+                if (strlen(tcpHost) > 0) {
+                    Serial.printf("[RNS] WiFi connected, attempting TCP connection to %s:%d\n", tcpHost, tcpPort);
+                    tcp_interface_impl->start(tcpHost, tcpPort);
+                }
+            }
+            tcp_interface_impl->tick(tcp_interface);
+        }
+    } else {
+        if (lora_interface_impl) {
+            lora_interface_impl->tick(lora_interface);
+        }
+    }
 
     // Process deferred send/retry from receipt callbacks
     if(_needs_send_processing) {

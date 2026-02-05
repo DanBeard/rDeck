@@ -12,6 +12,10 @@
 #include "retHal/Battery/EmulatorBattery.h"
 #include "retHal/GPS/EmulatorGPS.h"
 #include "retHal/Lora/EmulatorLora.h"
+#include "FS.h"
+
+// External filesystem instance from ArduinoGlobals.cpp
+extern FS SPIFFS;
 
 // HAL component instances
 static EmulatorScreen screen;
@@ -61,7 +65,7 @@ void light_sleep() {
 // The HAL struct - note: using emuHal not tDeckProHal!
 RetHal emuHal = {
     .screen = &screen,
-    .fs = nullptr,  // Filesystem handled separately for emulator
+    .fs = &SPIFFS,  // Use POSIX-based filesystem from ArduinoGlobals.cpp
     .keyboard = &kb,
     .battery = &bat,
     .gps = &gps,

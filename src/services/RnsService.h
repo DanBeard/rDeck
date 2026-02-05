@@ -16,16 +16,20 @@
 #include "Utilities/OS.h"
 #include "RnsUtils/FileSystem.h"
 #include "RnsUtils/LoraInterface.h"
+#include "RnsUtils/TCPClientInterface.h"
 #include "RnsUtils/RDeckAnnounceHandler.h"
 #include "RnsUtils/LXMFData.h"
 #include "RnsUtils/ServiceProtocol.h"
 #include "RnsUtils/TrustedServers.h"
 
+class WifiService;
+
 
 
 class RnsService: public BaseService {
-    
+
     friend class LoraInterface;
+    friend class TCPClientInterface;
 
 
 public:
@@ -67,19 +71,35 @@ public:
     // Service message handling - called from packet callback
     void handleServiceMessage(const Retcon::Service::ServiceMessage& msg, const RNS::Bytes& sourceHash);
 
+    // Interface mode
+    enum class InterfaceMode {
+        LORA,
+        TCP
+    };
+    InterfaceMode getInterfaceMode() const { return _interfaceMode; }
+    bool isInterfaceOnline() const;
+
 protected:
     void updateIcon(bool status);
-    // just Lora for now, but we could do TCP/UDP/etc in the future over wifi
-    BaseLora* _lora;
-    FS* _fs;
+    void initLoraInterface();
+    void initTcpInterface();
+
+    // Hardware/filesystem references
+    BaseLora* _lora = nullptr;
+    FS* _fs = nullptr;
 
     RNS::Identity identity;
 
-    // our destination for sending/recing lxmf messages
-    
-    //RNS::Interfaces::UDPInterface udp_interface("udp");
-    RNS::Interfaces::LoRaInterface *lora_interface_impl;
+    // Interface mode - either LoRa or TCP, mutually exclusive
+    InterfaceMode _interfaceMode = InterfaceMode::LORA;
+
+    // LoRa interface (used when WiFi mode disabled)
+    RNS::Interfaces::LoRaInterface* lora_interface_impl = nullptr;
     RNS::Interface lora_interface;
+
+    // TCP interface (used when WiFi mode enabled)
+    RNS::Interfaces::TCPClientInterface* tcp_interface_impl = nullptr;
+    RNS::Interface tcp_interface;
 
     RNS::FileSystem rns_fs;
 
