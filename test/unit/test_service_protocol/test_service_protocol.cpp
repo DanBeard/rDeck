@@ -50,6 +50,31 @@ void test_message_type_search_response_value(void) {
     TEST_ASSERT_EQUAL(0x21, static_cast<uint8_t>(MessageType::SEARCH_RESPONSE));
 }
 
+// Maps message type values
+void test_message_type_map_tile_request_value(void) {
+    TEST_ASSERT_EQUAL(0x30, static_cast<uint8_t>(MessageType::MAP_TILE_REQUEST));
+}
+
+void test_message_type_map_tile_response_value(void) {
+    TEST_ASSERT_EQUAL(0x31, static_cast<uint8_t>(MessageType::MAP_TILE_RESPONSE));
+}
+
+void test_message_type_map_route_request_value(void) {
+    TEST_ASSERT_EQUAL(0x33, static_cast<uint8_t>(MessageType::MAP_ROUTE_REQUEST));
+}
+
+void test_message_type_map_route_response_value(void) {
+    TEST_ASSERT_EQUAL(0x34, static_cast<uint8_t>(MessageType::MAP_ROUTE_RESPONSE));
+}
+
+void test_message_type_map_geocode_request_value(void) {
+    TEST_ASSERT_EQUAL(0x35, static_cast<uint8_t>(MessageType::MAP_GEOCODE_REQUEST));
+}
+
+void test_message_type_map_geocode_response_value(void) {
+    TEST_ASSERT_EQUAL(0x36, static_cast<uint8_t>(MessageType::MAP_GEOCODE_RESPONSE));
+}
+
 // ============================================================================
 // TrustOfferPayload Tests
 // ============================================================================
@@ -277,6 +302,285 @@ void test_search_response_empty_results(void) {
     decoded.deserialize(buffer, len);
 
     TEST_ASSERT_EQUAL(0, decoded.results.size());
+}
+
+// ============================================================================
+// MapTileRequestPayload Tests
+// ============================================================================
+
+void test_map_tile_request_serialize_deserialize(void) {
+    MapTileRequestPayload original;
+    original.z = 14;
+    original.x = 2746;
+    original.y = 6327;
+    original.format = TileFormat::MONO_RLE;
+
+    uint8_t buffer[64];
+    size_t len = original.serialize(buffer, sizeof(buffer));
+    TEST_ASSERT_TRUE(len > 0);
+
+    MapTileRequestPayload decoded;
+    decoded.deserialize(buffer, len);
+
+    TEST_ASSERT_EQUAL(14, decoded.z);
+    TEST_ASSERT_EQUAL(2746, decoded.x);
+    TEST_ASSERT_EQUAL(6327, decoded.y);
+    TEST_ASSERT_EQUAL(TileFormat::MONO_RLE, decoded.format);
+}
+
+void test_map_tile_request_canonical_structure(void) {
+    MapTileRequestPayload payload;
+    payload.z = 12;
+    payload.x = 1000;
+    payload.y = 2000;
+    payload.format = TileFormat::RAW_1BIT;
+
+    uint8_t buffer[64];
+    size_t len = payload.serialize(buffer, sizeof(buffer));
+
+    JsonDocument doc;
+    deserializeMsgPack(doc, buffer, len);
+
+    TEST_ASSERT_EQUAL(12, doc["z"].as<uint8_t>());
+    TEST_ASSERT_EQUAL(1000, doc["x"].as<uint32_t>());
+    TEST_ASSERT_EQUAL(2000, doc["y"].as<uint32_t>());
+    TEST_ASSERT_EQUAL(1, doc["format"].as<uint8_t>());  // RAW_1BIT = 1
+}
+
+// ============================================================================
+// MapTileResponsePayload Tests
+// ============================================================================
+
+void test_map_tile_response_serialize_deserialize(void) {
+    MapTileResponsePayload original;
+    original.z = 14;
+    original.x = 2746;
+    original.y = 6327;
+    original.format = TileFormat::MONO_RLE;
+    original.chunk_index = 0;
+    original.total_chunks = 3;
+    original.data = {0x01, 0xFF, 0x02, 0x00, 0x03, 0xAA};  // Sample RLE data
+
+    uint8_t buffer[256];
+    size_t len = original.serialize(buffer, sizeof(buffer));
+
+    MapTileResponsePayload decoded;
+    decoded.deserialize(buffer, len);
+
+    TEST_ASSERT_EQUAL(14, decoded.z);
+    TEST_ASSERT_EQUAL(2746, decoded.x);
+    TEST_ASSERT_EQUAL(6327, decoded.y);
+    TEST_ASSERT_EQUAL(TileFormat::MONO_RLE, decoded.format);
+    TEST_ASSERT_EQUAL(0, decoded.chunk_index);
+    TEST_ASSERT_EQUAL(3, decoded.total_chunks);
+    TEST_ASSERT_EQUAL(6, decoded.data.size());
+    TEST_ASSERT_EQUAL(0x01, decoded.data[0]);
+    TEST_ASSERT_EQUAL(0xAA, decoded.data[5]);
+}
+
+void test_map_tile_response_with_error(void) {
+    MapTileResponsePayload original;
+    original.z = 14;
+    original.x = 9999;
+    original.y = 9999;
+    original.format = TileFormat::MONO_RLE;
+    original.chunk_index = 0;
+    original.total_chunks = 1;
+    original.error = "Tile not found";
+
+    uint8_t buffer[256];
+    size_t len = original.serialize(buffer, sizeof(buffer));
+
+    MapTileResponsePayload decoded;
+    decoded.deserialize(buffer, len);
+
+    TEST_ASSERT_EQUAL_STRING("Tile not found", decoded.error.c_str());
+    TEST_ASSERT_EQUAL(0, decoded.data.size());
+}
+
+// ============================================================================
+// MapRouteRequestPayload Tests
+// ============================================================================
+
+void test_map_route_request_serialize_deserialize(void) {
+    MapRouteRequestPayload original;
+    original.start_lat = 377749000;  // 37.7749 * 1e7
+    original.start_lon = -1224194000;  // -122.4194 * 1e7
+    original.end_lat = 377850000;
+    original.end_lon = -1224000000;
+    original.mode = TravelMode::BIKE;
+
+    uint8_t buffer[64];
+    size_t len = original.serialize(buffer, sizeof(buffer));
+
+    MapRouteRequestPayload decoded;
+    decoded.deserialize(buffer, len);
+
+    TEST_ASSERT_EQUAL(377749000, decoded.start_lat);
+    TEST_ASSERT_EQUAL(-1224194000, decoded.start_lon);
+    TEST_ASSERT_EQUAL(377850000, decoded.end_lat);
+    TEST_ASSERT_EQUAL(-1224000000, decoded.end_lon);
+    TEST_ASSERT_EQUAL(TravelMode::BIKE, decoded.mode);
+}
+
+void test_map_route_request_canonical_structure(void) {
+    MapRouteRequestPayload payload;
+    payload.start_lat = 100000000;
+    payload.start_lon = 200000000;
+    payload.end_lat = 300000000;
+    payload.end_lon = 400000000;
+    payload.mode = TravelMode::CAR;
+
+    uint8_t buffer[64];
+    size_t len = payload.serialize(buffer, sizeof(buffer));
+
+    JsonDocument doc;
+    deserializeMsgPack(doc, buffer, len);
+
+    TEST_ASSERT_EQUAL(100000000, doc["start_lat"].as<int32_t>());
+    TEST_ASSERT_EQUAL(200000000, doc["start_lon"].as<int32_t>());
+    TEST_ASSERT_EQUAL(2, doc["mode"].as<uint8_t>());  // CAR = 2
+}
+
+// ============================================================================
+// MapRouteResponsePayload Tests
+// ============================================================================
+
+void test_map_route_response_serialize_deserialize(void) {
+    MapRouteResponsePayload original;
+    original.points = {377749000, -1224194000, 377750000, -1224190000, 377760000, -1224180000};
+    original.instructions.push_back({100, "start", "Main St"});
+    original.instructions.push_back({200, "turn-left", "Oak Ave"});
+    original.instructions.push_back({50, "arrive", ""});
+    original.total_distance_m = 350;
+    original.total_time_s = 240;
+
+    uint8_t buffer[512];
+    size_t len = original.serialize(buffer, sizeof(buffer));
+
+    MapRouteResponsePayload decoded;
+    decoded.deserialize(buffer, len);
+
+    TEST_ASSERT_EQUAL(6, decoded.points.size());
+    TEST_ASSERT_EQUAL(377749000, decoded.points[0]);
+    TEST_ASSERT_EQUAL(-1224180000, decoded.points[5]);
+    TEST_ASSERT_EQUAL(3, decoded.instructions.size());
+    TEST_ASSERT_EQUAL(100, decoded.instructions[0].distance_m);
+    TEST_ASSERT_EQUAL_STRING("start", decoded.instructions[0].maneuver.c_str());
+    TEST_ASSERT_EQUAL_STRING("Main St", decoded.instructions[0].street.c_str());
+    TEST_ASSERT_EQUAL_STRING("arrive", decoded.instructions[2].maneuver.c_str());
+    TEST_ASSERT_EQUAL(350, decoded.total_distance_m);
+    TEST_ASSERT_EQUAL(240, decoded.total_time_s);
+}
+
+void test_map_route_response_with_error(void) {
+    MapRouteResponsePayload original;
+    original.error = "No route found";
+
+    uint8_t buffer[128];
+    size_t len = original.serialize(buffer, sizeof(buffer));
+
+    MapRouteResponsePayload decoded;
+    decoded.deserialize(buffer, len);
+
+    TEST_ASSERT_EQUAL_STRING("No route found", decoded.error.c_str());
+    TEST_ASSERT_EQUAL(0, decoded.points.size());
+}
+
+// ============================================================================
+// MapGeocodeRequestPayload Tests
+// ============================================================================
+
+void test_map_geocode_request_serialize_deserialize(void) {
+    MapGeocodeRequestPayload original;
+    original.query = "1600 Amphitheatre Parkway";
+    original.bias_lat = 377749000;
+    original.bias_lon = -1224194000;
+    original.has_bias = true;
+    original.max_results = 3;
+
+    uint8_t buffer[256];
+    size_t len = original.serialize(buffer, sizeof(buffer));
+
+    MapGeocodeRequestPayload decoded;
+    decoded.deserialize(buffer, len);
+
+    TEST_ASSERT_EQUAL_STRING("1600 Amphitheatre Parkway", decoded.query.c_str());
+    TEST_ASSERT_EQUAL(377749000, decoded.bias_lat);
+    TEST_ASSERT_EQUAL(-1224194000, decoded.bias_lon);
+    TEST_ASSERT_TRUE(decoded.has_bias);
+    TEST_ASSERT_EQUAL(3, decoded.max_results);
+}
+
+void test_map_geocode_request_without_bias(void) {
+    MapGeocodeRequestPayload original;
+    original.query = "Empire State Building";
+    original.has_bias = false;
+    original.max_results = 5;
+
+    uint8_t buffer[128];
+    size_t len = original.serialize(buffer, sizeof(buffer));
+
+    MapGeocodeRequestPayload decoded;
+    decoded.deserialize(buffer, len);
+
+    TEST_ASSERT_EQUAL_STRING("Empire State Building", decoded.query.c_str());
+    TEST_ASSERT_FALSE(decoded.has_bias);
+}
+
+// ============================================================================
+// MapGeocodeResponsePayload Tests
+// ============================================================================
+
+void test_map_geocode_response_serialize_deserialize(void) {
+    MapGeocodeResponsePayload original;
+    original.query = "coffee";
+    original.results.push_back({"Starbucks, 123 Main St, City", 377749000, -1224194000, "cafe"});
+    original.results.push_back({"Peet's Coffee, 456 Oak Ave", 377750000, -1224190000, "cafe"});
+
+    uint8_t buffer[512];
+    size_t len = original.serialize(buffer, sizeof(buffer));
+
+    MapGeocodeResponsePayload decoded;
+    decoded.deserialize(buffer, len);
+
+    TEST_ASSERT_EQUAL_STRING("coffee", decoded.query.c_str());
+    TEST_ASSERT_EQUAL(2, decoded.results.size());
+    TEST_ASSERT_EQUAL_STRING("Starbucks, 123 Main St, City", decoded.results[0].display_name.c_str());
+    TEST_ASSERT_EQUAL(377749000, decoded.results[0].lat);
+    TEST_ASSERT_EQUAL(-1224194000, decoded.results[0].lon);
+    TEST_ASSERT_EQUAL_STRING("cafe", decoded.results[0].type.c_str());
+}
+
+void test_map_geocode_response_with_error(void) {
+    MapGeocodeResponsePayload original;
+    original.query = "xyzabc123";
+    original.error = "Geocoding service unavailable";
+
+    uint8_t buffer[256];
+    size_t len = original.serialize(buffer, sizeof(buffer));
+
+    MapGeocodeResponsePayload decoded;
+    decoded.deserialize(buffer, len);
+
+    TEST_ASSERT_EQUAL_STRING("xyzabc123", decoded.query.c_str());
+    TEST_ASSERT_EQUAL_STRING("Geocoding service unavailable", decoded.error.c_str());
+    TEST_ASSERT_EQUAL(0, decoded.results.size());
+}
+
+void test_map_geocode_response_empty_results(void) {
+    MapGeocodeResponsePayload original;
+    original.query = "nonexistent place";
+    // No results, no error
+
+    uint8_t buffer[128];
+    size_t len = original.serialize(buffer, sizeof(buffer));
+
+    MapGeocodeResponsePayload decoded;
+    decoded.deserialize(buffer, len);
+
+    TEST_ASSERT_EQUAL(0, decoded.results.size());
+    TEST_ASSERT_TRUE(decoded.error.empty());
 }
 
 // ============================================================================
@@ -864,6 +1168,12 @@ int main(int argc, char **argv) {
     RUN_TEST(test_message_type_ntp_response_value);
     RUN_TEST(test_message_type_search_request_value);
     RUN_TEST(test_message_type_search_response_value);
+    RUN_TEST(test_message_type_map_tile_request_value);
+    RUN_TEST(test_message_type_map_tile_response_value);
+    RUN_TEST(test_message_type_map_route_request_value);
+    RUN_TEST(test_message_type_map_route_response_value);
+    RUN_TEST(test_message_type_map_geocode_request_value);
+    RUN_TEST(test_message_type_map_geocode_response_value);
 
     // TrustOfferPayload tests
     RUN_TEST(test_trust_offer_serialize_deserialize);
@@ -890,6 +1200,31 @@ int main(int argc, char **argv) {
     RUN_TEST(test_search_response_with_results);
     RUN_TEST(test_search_response_with_error);
     RUN_TEST(test_search_response_empty_results);
+
+    // MapTileRequestPayload tests
+    RUN_TEST(test_map_tile_request_serialize_deserialize);
+    RUN_TEST(test_map_tile_request_canonical_structure);
+
+    // MapTileResponsePayload tests
+    RUN_TEST(test_map_tile_response_serialize_deserialize);
+    RUN_TEST(test_map_tile_response_with_error);
+
+    // MapRouteRequestPayload tests
+    RUN_TEST(test_map_route_request_serialize_deserialize);
+    RUN_TEST(test_map_route_request_canonical_structure);
+
+    // MapRouteResponsePayload tests
+    RUN_TEST(test_map_route_response_serialize_deserialize);
+    RUN_TEST(test_map_route_response_with_error);
+
+    // MapGeocodeRequestPayload tests
+    RUN_TEST(test_map_geocode_request_serialize_deserialize);
+    RUN_TEST(test_map_geocode_request_without_bias);
+
+    // MapGeocodeResponsePayload tests
+    RUN_TEST(test_map_geocode_response_serialize_deserialize);
+    RUN_TEST(test_map_geocode_response_with_error);
+    RUN_TEST(test_map_geocode_response_empty_results);
 
     // ServiceMessage tests
     RUN_TEST(test_service_message_is_service_message_true);

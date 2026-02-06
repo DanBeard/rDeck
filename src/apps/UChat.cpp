@@ -534,7 +534,12 @@ void UChat::renderMainMenu() {
     // Identity label
     lv_obj_t *id_label = lv_label_create(statusview);
     lv_obj_set_style_text_color(id_label, _retos->ui()->fg_color(), LV_PART_MAIN | LV_STATE_DEFAULT);
-    string id_text = "Identity: " + _rns_service->lxmf_delivery_src.hash().toHex().substr(0, 12) + "...";
+    string id_text = "Identity: ";
+    if (_rns_service->lxmf_delivery_src) {
+        id_text += _rns_service->lxmf_delivery_src.hash().toHex().substr(0, 12) + "...";
+    } else {
+        id_text += "Initializing...";
+    }
     lv_label_set_text(id_label, id_text.c_str());
 
     // LoRa status label

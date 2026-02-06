@@ -146,7 +146,8 @@ void RnsService::start(RetOS* retos){
         identity = RNS::Identity(true);
         RNS::Bytes priv = identity.get_private_key();
         File priv_file = _fs->open("/reticulum/identity.priv", FILE_WRITE, true);
-        const char* priv_hex = priv.toHex().c_str();
+        // Store hex string in a std::string to avoid dangling pointer
+        std::string priv_hex = priv.toHex();
 
         JsonDocument doc;
         doc["priv_hex"] = priv_hex;
@@ -565,7 +566,7 @@ bool RnsService::drawSettings(lv_obj_t * container, Settings* settings) {
         } else {
             Serial.print("Unknown!!");
         }
-    }; 
+    };
 
     return true;
 }
@@ -717,10 +718,11 @@ void RnsService::requestNtpSync(const RNS::Bytes& serverHash) {
     Serial.printf("[Service] Sent NTP_REQUEST to %s\n", serverHash.toHex().substr(0, 12).c_str());
 }
 
-void RnsService::requestSearch(const RNS::Bytes& serverHash, const std::string& query) {
+void RnsService::requestSearch(const RNS::Bytes& serverHash, const std::string& query, bool aiSummary) {
     Retcon::Service::SearchRequestPayload payload;
     payload.query = query;
     payload.max_results = 5;
+    payload.ai_summary = aiSummary;
 
     uint8_t payloadBuf[256];
     size_t payloadLen = payload.serialize(payloadBuf, sizeof(payloadBuf));
@@ -737,7 +739,89 @@ void RnsService::requestSearch(const RNS::Bytes& serverHash, const std::string& 
     _pending_searches[requestId] = {query, requestId};
 
     sendServiceMessage(serverHash, msg);
-    Serial.printf("[Service] Sent SEARCH_REQUEST for '%s'\n", query.c_str());
+    Serial.printf("[Service] Sent SEARCH_REQUEST for '%s' (AI: %s)\n", query.c_str(), aiSummary ? "yes" : "no");
+}
+
+// ============================================================================
+// Maps Service Methods
+// ============================================================================
+
+void RnsService::requestMapTile(const RNS::Bytes& serverHash, uint8_t z, uint32_t x, uint32_t y,
+                                 Retcon::Service::TileFormat format) {
+    Retcon::Service::MapTileRequestPayload payload;
+    payload.z = z;
+    payload.x = x;
+    payload.y = y;
+    payload.format = format;
+
+    uint8_t payloadBuf[64];
+    size_t payloadLen = payload.serialize(payloadBuf, sizeof(payloadBuf));
+
+    uint32_t requestId = (uint32_t)(millis() & 0xFFFFFFFF);
+
+    Retcon::Service::ServiceMessage msg;
+    msg.msg_type = Retcon::Service::MessageType::MAP_TILE_REQUEST;
+    msg.service = "maps";
+    msg.payload.assign(payloadBuf, payloadLen);
+    msg.request_id = requestId;
+
+    // Store pending tile info for chunk reassembly
+    _pending_tiles[requestId] = {z, x, y, format, 0, {}};
+
+    sendServiceMessage(serverHash, msg);
+    Serial.printf("[Service] Sent MAP_TILE_REQUEST z=%d x=%u y=%u\n", z, x, y);
+}
+
+void RnsService::requestRoute(const RNS::Bytes& serverHash, int32_t startLat, int32_t startLon,
+                               int32_t endLat, int32_t endLon, Retcon::Service::TravelMode mode) {
+    Retcon::Service::MapRouteRequestPayload payload;
+    payload.start_lat = startLat;
+    payload.start_lon = startLon;
+    payload.end_lat = endLat;
+    payload.end_lon = endLon;
+    payload.mode = mode;
+
+    uint8_t payloadBuf[64];
+    size_t payloadLen = payload.serialize(payloadBuf, sizeof(payloadBuf));
+
+    uint32_t requestId = (uint32_t)(millis() & 0xFFFFFFFF);
+
+    Retcon::Service::ServiceMessage msg;
+    msg.msg_type = Retcon::Service::MessageType::MAP_ROUTE_REQUEST;
+    msg.service = "maps";
+    msg.payload.assign(payloadBuf, payloadLen);
+    msg.request_id = requestId;
+
+    _pending_routes[requestId] = {requestId};
+
+    sendServiceMessage(serverHash, msg);
+    Serial.printf("[Service] Sent MAP_ROUTE_REQUEST\n");
+}
+
+void RnsService::requestGeocode(const RNS::Bytes& serverHash, const std::string& query,
+                                 int32_t biasLat, int32_t biasLon, bool hasBias, uint8_t maxResults) {
+    Retcon::Service::MapGeocodeRequestPayload payload;
+    payload.query = query;
+    payload.bias_lat = biasLat;
+    payload.bias_lon = biasLon;
+    payload.has_bias = hasBias;
+    payload.max_results = maxResults;
+
+    uint8_t payloadBuf[256];
+    size_t payloadLen = payload.serialize(payloadBuf, sizeof(payloadBuf));
+
+    uint32_t requestId = (uint32_t)(millis() & 0xFFFFFFFF);
+
+    Retcon::Service::ServiceMessage msg;
+    msg.msg_type = Retcon::Service::MessageType::MAP_GEOCODE_REQUEST;
+    msg.service = "maps";
+    msg.payload.assign(payloadBuf, payloadLen);
+    msg.request_id = requestId;
+
+    _pending_geocodes[requestId] = {query, requestId};
+
+    sendServiceMessage(serverHash, msg);
+    Serial.printf("[Service] Sent MAP_GEOCODE_REQUEST for '%s'\n", query.c_str());
 }
 
 void RnsService::handleServiceMessage(const Retcon::Service::ServiceMessage& msg, const RNS::Bytes& sourceHash) {
@@ -782,6 +866,42 @@ void RnsService::handleServiceMessage(const Retcon::Service::ServiceMessage& msg
             Retcon::Service::SearchResponsePayload payload;
             payload.deserialize(msg.payload.data(), msg.payload.size());
             handleSearchResponse(payload, msg.request_id);
+            break;
+        }
+
+        case Retcon::Service::MessageType::MAP_TILE_RESPONSE: {
+            // Only accept from trusted servers
+            if (!Retcon::Service::getTrustedServers().isTrusted(sourceHash)) {
+                Serial.println("[Service] Ignoring tile response from untrusted server");
+                return;
+            }
+            Retcon::Service::MapTileResponsePayload payload;
+            payload.deserialize(msg.payload.data(), msg.payload.size());
+            handleMapTileResponse(payload, msg.request_id);
+            break;
+        }
+
+        case Retcon::Service::MessageType::MAP_ROUTE_RESPONSE: {
+            // Only accept from trusted servers
+            if (!Retcon::Service::getTrustedServers().isTrusted(sourceHash)) {
+                Serial.println("[Service] Ignoring route response from untrusted server");
+                return;
+            }
+            Retcon::Service::MapRouteResponsePayload payload;
+            payload.deserialize(msg.payload.data(), msg.payload.size());
+            handleRouteResponse(payload, msg.request_id);
+            break;
+        }
+
+        case Retcon::Service::MessageType::MAP_GEOCODE_RESPONSE: {
+            // Only accept from trusted servers
+            if (!Retcon::Service::getTrustedServers().isTrusted(sourceHash)) {
+                Serial.println("[Service] Ignoring geocode response from untrusted server");
+                return;
+            }
+            Retcon::Service::MapGeocodeResponsePayload payload;
+            payload.deserialize(msg.payload.data(), msg.payload.size());
+            handleGeocodeResponse(payload, msg.request_id);
             break;
         }
 
@@ -838,5 +958,112 @@ void RnsService::handleSearchResponse(const Retcon::Service::SearchResponsePaylo
     auto results = std::make_shared<Retcon::Service::SearchResponsePayload>(payload);
     e.data = results;
 
+    _retos->publishEvent(e);
+}
+
+// ============================================================================
+// Maps Response Handlers
+// ============================================================================
+
+void RnsService::handleMapTileResponse(const Retcon::Service::MapTileResponsePayload& payload, uint32_t requestId) {
+    Serial.printf("[Service] Received MAP_TILE_RESPONSE z=%d x=%u y=%u chunk %d/%d\n",
+                  payload.z, payload.x, payload.y, payload.chunk_index + 1, payload.total_chunks);
+
+    if (!payload.error.empty()) {
+        Serial.printf("[Service] Tile error: %s\n", payload.error.c_str());
+        _pending_tiles.erase(requestId);
+
+        // Send error event
+        Event e;
+        e.src = this;
+        e.type = EventType::MAP_TILE_RECEIVED;
+        auto errorPayload = std::make_shared<Retcon::Service::MapTileResponsePayload>(payload);
+        e.data = errorPayload;
+        _retos->publishEvent(e);
+        return;
+    }
+
+    // Find or create pending tile entry
+    auto it = _pending_tiles.find(requestId);
+    if (it == _pending_tiles.end()) {
+        // First chunk - create entry
+        _pending_tiles[requestId] = {payload.z, payload.x, payload.y, payload.format, payload.total_chunks, {}};
+        it = _pending_tiles.find(requestId);
+    }
+
+    // Store this chunk
+    it->second.chunks[payload.chunk_index] = payload.data;
+
+    // Check if we have all chunks
+    if (it->second.chunks.size() == payload.total_chunks) {
+        // Reassemble tile data
+        std::vector<uint8_t> fullData;
+        for (uint16_t i = 0; i < payload.total_chunks; i++) {
+            const auto& chunk = it->second.chunks[i];
+            fullData.insert(fullData.end(), chunk.begin(), chunk.end());
+        }
+
+        // Create complete response payload
+        Retcon::Service::MapTileResponsePayload completePayload;
+        completePayload.z = it->second.z;
+        completePayload.x = it->second.x;
+        completePayload.y = it->second.y;
+        completePayload.format = it->second.format;
+        completePayload.chunk_index = 0;
+        completePayload.total_chunks = 1;
+        completePayload.data = fullData;
+
+        // Remove from pending
+        _pending_tiles.erase(requestId);
+
+        // Send event with complete tile
+        Event e;
+        e.src = this;
+        e.type = EventType::MAP_TILE_RECEIVED;
+        auto results = std::make_shared<Retcon::Service::MapTileResponsePayload>(completePayload);
+        e.data = results;
+        _retos->publishEvent(e);
+
+        Serial.printf("[Service] Tile complete: %zu bytes\n", fullData.size());
+    }
+}
+
+void RnsService::handleRouteResponse(const Retcon::Service::MapRouteResponsePayload& payload, uint32_t requestId) {
+    Serial.printf("[Service] Received MAP_ROUTE_RESPONSE: %zu points, %zu instructions\n",
+                  payload.points.size() / 2, payload.instructions.size());
+
+    if (!payload.error.empty()) {
+        Serial.printf("[Service] Route error: %s\n", payload.error.c_str());
+    }
+
+    // Remove from pending
+    _pending_routes.erase(requestId);
+
+    // Send event with route
+    Event e;
+    e.src = this;
+    e.type = EventType::MAP_ROUTE_RECEIVED;
+    auto results = std::make_shared<Retcon::Service::MapRouteResponsePayload>(payload);
+    e.data = results;
+    _retos->publishEvent(e);
+}
+
+void RnsService::handleGeocodeResponse(const Retcon::Service::MapGeocodeResponsePayload& payload, uint32_t requestId) {
+    Serial.printf("[Service] Received MAP_GEOCODE_RESPONSE for '%s': %zu results\n",
+                  payload.query.c_str(), payload.results.size());
+
+    if (!payload.error.empty()) {
+        Serial.printf("[Service] Geocode error: %s\n", payload.error.c_str());
+    }
+
+    // Remove from pending
+    _pending_geocodes.erase(requestId);
+
+    // Send event with geocode results
+    Event e;
+    e.src = this;
+    e.type = EventType::MAP_GEOCODE_RESULTS;
+    auto results = std::make_shared<Retcon::Service::MapGeocodeResponsePayload>(payload);
+    e.data = results;
     _retos->publishEvent(e);
 }

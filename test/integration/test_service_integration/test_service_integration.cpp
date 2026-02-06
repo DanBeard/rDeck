@@ -311,6 +311,7 @@ void test_search_request_message_generation(void) {
     SearchRequestPayload payload;
     payload.query = "reticulum mesh network";
     payload.max_results = 5;
+    payload.ai_summary = false;
 
     uint8_t payloadBuf[128];
     size_t payloadLen = payload.serialize(payloadBuf, sizeof(payloadBuf));
@@ -328,6 +329,25 @@ void test_search_request_message_generation(void) {
     TEST_ASSERT_EQUAL(0x20, fields["msg_type"].as<uint8_t>());
     TEST_ASSERT_EQUAL_STRING("search", fields["service"].as<const char*>());
     TEST_ASSERT_EQUAL(999, fields["request_id"].as<uint32_t>());
+}
+
+void test_search_request_with_ai_summary(void) {
+    // Test generating a SEARCH_REQUEST with AI summary enabled
+    SearchRequestPayload payload;
+    payload.query = "what is reticulum";
+    payload.max_results = 3;
+    payload.ai_summary = true;
+
+    uint8_t payloadBuf[128];
+    size_t payloadLen = payload.serialize(payloadBuf, sizeof(payloadBuf));
+
+    // Deserialize and verify
+    SearchRequestPayload decoded;
+    decoded.deserialize(payloadBuf, payloadLen);
+
+    TEST_ASSERT_EQUAL_STRING("what is reticulum", decoded.query.c_str());
+    TEST_ASSERT_EQUAL(3, decoded.max_results);
+    TEST_ASSERT_TRUE(decoded.ai_summary);
 }
 
 void test_search_response_with_results(void) {
@@ -429,6 +449,40 @@ void test_search_response_empty_results(void) {
     TEST_ASSERT_EQUAL_STRING("xyzzy12345 gibberish", decoded.query.c_str());
     TEST_ASSERT_EQUAL(0, decoded.results.size());
     TEST_ASSERT_TRUE(decoded.error.empty());
+    TEST_ASSERT_TRUE(decoded.summary.empty());
+}
+
+void test_search_response_with_ai_summary(void) {
+    // Test receiving SEARCH_RESPONSE with AI summary
+    SearchResponsePayload innerPayload;
+    innerPayload.query = "what is reticulum";
+    innerPayload.results.push_back({"Reticulum Network", "https://reticulum.network", "Official site"});
+    innerPayload.summary = "Reticulum is a cryptography-based networking stack for building local and wide-area networks with commodity hardware.";
+
+    uint8_t innerBuf[1024];
+    size_t innerLen = innerPayload.serialize(innerBuf, sizeof(innerBuf));
+
+    ServiceMessage incomingMsg;
+    incomingMsg.msg_type = MessageType::SEARCH_RESPONSE;
+    incomingMsg.service = "search";
+    incomingMsg.request_id = 1002;
+    incomingMsg.payload.assign(innerBuf, innerLen);
+
+    auto lxmfPayload = createLxmfPayload(incomingMsg);
+
+    JsonDocument fields;
+    TEST_ASSERT_TRUE(extractServiceFields(lxmfPayload, fields));
+
+    ServiceMessage svcMsg = ServiceMessage::fromFields(fields);
+
+    SearchResponsePayload decoded;
+    decoded.deserialize(svcMsg.payload.data(), svcMsg.payload.size());
+
+    TEST_ASSERT_EQUAL_STRING("what is reticulum", decoded.query.c_str());
+    TEST_ASSERT_EQUAL(1, decoded.results.size());
+    TEST_ASSERT_TRUE(decoded.error.empty());
+    TEST_ASSERT_FALSE(decoded.summary.empty());
+    TEST_ASSERT_TRUE(decoded.summary.find("Reticulum") != std::string::npos);
 }
 
 // ============================================================================
@@ -535,9 +589,11 @@ int main(int argc, char **argv) {
 
     // Search workflow tests
     RUN_TEST(test_search_request_message_generation);
+    RUN_TEST(test_search_request_with_ai_summary);
     RUN_TEST(test_search_response_with_results);
     RUN_TEST(test_search_response_with_error);
     RUN_TEST(test_search_response_empty_results);
+    RUN_TEST(test_search_response_with_ai_summary);
 
     // Message routing tests
     RUN_TEST(test_message_type_routing);

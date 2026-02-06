@@ -55,6 +55,92 @@ class TestEmulatorStandalone:
         assert not emulator.is_running()
 
 
+class TestEmulatorAppLaunch:
+    """Tests for launching individual apps in the emulator.
+
+    These tests use the emulator_with_app_launcher fixture which runs
+    the emulator with --max-frames to auto-exit.
+    """
+
+    @pytest.mark.timeout(45)
+    def test_launch_settings_app(self, emulator_with_app_launcher):
+        """Test launching and closing Settings app."""
+        manager = emulator_with_app_launcher("Settings", max_frames=150)
+        assert manager.is_running()
+
+        # Let it run for a bit
+        time.sleep(5)
+
+        # Check for crash indicators
+        output = manager.get_output()
+        assert "Segmentation fault" not in output
+        assert "FATAL" not in output
+        assert "Assertion" not in output
+
+        # Check app launched
+        assert "[Emulator] Auto-launching app: Settings" in output or "Settings" in output
+
+    @pytest.mark.timeout(45)
+    def test_launch_clock_app(self, emulator_with_app_launcher):
+        """Test launching Clock app."""
+        manager = emulator_with_app_launcher("Clock", max_frames=150)
+        assert manager.is_running()
+
+        time.sleep(5)
+
+        output = manager.get_output()
+        assert "Segmentation fault" not in output
+        assert "FATAL" not in output
+
+    @pytest.mark.timeout(45)
+    def test_launch_notes_app(self, emulator_with_app_launcher):
+        """Test launching Notes app."""
+        manager = emulator_with_app_launcher("Notes", max_frames=150)
+        assert manager.is_running()
+
+        time.sleep(5)
+
+        output = manager.get_output()
+        assert "Segmentation fault" not in output
+        assert "FATAL" not in output
+
+    @pytest.mark.timeout(45)
+    def test_launch_uchat_app(self, emulator_with_app_launcher):
+        """Test launching uChat app."""
+        manager = emulator_with_app_launcher("uChat", max_frames=150)
+        assert manager.is_running()
+
+        time.sleep(5)
+
+        output = manager.get_output()
+        assert "Segmentation fault" not in output
+        assert "FATAL" not in output
+
+    @pytest.mark.timeout(45)
+    def test_launch_search_app(self, emulator_with_app_launcher):
+        """Test launching Search app."""
+        manager = emulator_with_app_launcher("Search", max_frames=150)
+        assert manager.is_running()
+
+        time.sleep(5)
+
+        output = manager.get_output()
+        assert "Segmentation fault" not in output
+        assert "FATAL" not in output
+
+    @pytest.mark.timeout(45)
+    def test_launch_maps_app(self, emulator_with_app_launcher):
+        """Test launching Maps app."""
+        manager = emulator_with_app_launcher("Maps", max_frames=150)
+        assert manager.is_running()
+
+        time.sleep(5)
+
+        output = manager.get_output()
+        assert "Segmentation fault" not in output
+        assert "FATAL" not in output
+
+
 class TestTrustWorkflow:
     """Tests for the trust establishment workflow.
 
@@ -135,6 +221,366 @@ class TestSearchWorkflow:
         assert server.is_running()
         assert emulator.is_running()
 
+    def test_search_protocol_with_ai_summary_flag(self):
+        """Test search request/response with ai_summary flag."""
+        from companion_server.protocol.messages import (
+            MessageType,
+            ServiceMessage,
+            SearchRequestPayload,
+            SearchResponsePayload,
+            SearchResult,
+        )
+        from companion_server.protocol.serialization import (
+            encode_service_fields,
+            decode_service_fields,
+        )
+
+        # Test request with ai_summary=True
+        request_msg = ServiceMessage(
+            msg_type=MessageType.SEARCH_REQUEST,
+            service="search",
+            payload=SearchRequestPayload(
+                query="what is reticulum",
+                max_results=3,
+                ai_summary=True,
+            ),
+            request_id=12345,
+        )
+
+        # Encode and decode
+        fields = encode_service_fields(request_msg)
+        decoded_request = decode_service_fields(fields)
+
+        assert decoded_request.payload.query == "what is reticulum"
+        assert decoded_request.payload.ai_summary is True
+
+        # Test response with summary
+        response_msg = ServiceMessage(
+            msg_type=MessageType.SEARCH_RESPONSE,
+            service="search",
+            payload=SearchResponsePayload(
+                query="what is reticulum",
+                results=[SearchResult("Reticulum", "https://reticulum.network", "Mesh networking")],
+                error=None,
+                summary="Reticulum is a cryptography-based networking protocol for mesh communication.",
+            ),
+            request_id=12345,
+        )
+
+        fields = encode_service_fields(response_msg)
+        decoded_response = decode_service_fields(fields)
+
+        assert decoded_response.payload.summary is not None
+        assert "Reticulum" in decoded_response.payload.summary
+
+
+class TestMapsProtocol:
+    """Tests for Maps protocol messages."""
+
+    def test_map_tile_request_roundtrip(self):
+        """Test map tile request/response encoding/decoding."""
+        from companion_server.protocol.messages import (
+            MessageType,
+            ServiceMessage,
+            MapTileRequestPayload,
+            MapTileResponsePayload,
+            TileFormat,
+        )
+        from companion_server.protocol.serialization import (
+            encode_service_fields,
+            decode_service_fields,
+        )
+
+        # Test tile request
+        request_msg = ServiceMessage(
+            msg_type=MessageType.MAP_TILE_REQUEST,
+            service="maps",
+            payload=MapTileRequestPayload(
+                z=14,
+                x=8529,
+                y=5975,
+                format=TileFormat.MONO_RLE,
+            ),
+            request_id=42,
+        )
+
+        fields = encode_service_fields(request_msg)
+        decoded_request = decode_service_fields(fields)
+
+        assert decoded_request.msg_type == MessageType.MAP_TILE_REQUEST
+        assert decoded_request.payload.z == 14
+        assert decoded_request.payload.x == 8529
+        assert decoded_request.payload.y == 5975
+        assert decoded_request.payload.format == TileFormat.MONO_RLE
+
+    def test_map_tile_response_with_data(self):
+        """Test map tile response with tile data."""
+        from companion_server.protocol.messages import (
+            MessageType,
+            ServiceMessage,
+            MapTileResponsePayload,
+            TileFormat,
+        )
+        from companion_server.protocol.serialization import (
+            encode_service_fields,
+            decode_service_fields,
+        )
+
+        # Simulated RLE-compressed tile data
+        test_tile_data = bytes([0xFF] * 100)  # Sample compressed data
+
+        response_msg = ServiceMessage(
+            msg_type=MessageType.MAP_TILE_RESPONSE,
+            service="maps",
+            payload=MapTileResponsePayload(
+                z=14,
+                x=8529,
+                y=5975,
+                format=TileFormat.MONO_RLE,
+                chunk_index=0,
+                total_chunks=1,
+                data=test_tile_data,
+                error=None,
+            ),
+            request_id=42,
+        )
+
+        fields = encode_service_fields(response_msg)
+        decoded_response = decode_service_fields(fields)
+
+        assert decoded_response.msg_type == MessageType.MAP_TILE_RESPONSE
+        assert decoded_response.payload.z == 14
+        assert decoded_response.payload.x == 8529
+        assert decoded_response.payload.y == 5975
+        assert decoded_response.payload.chunk_index == 0
+        assert decoded_response.payload.total_chunks == 1
+        assert decoded_response.payload.data == test_tile_data
+        assert decoded_response.payload.error is None
+
+    def test_map_tile_response_with_error(self):
+        """Test map tile response with error."""
+        from companion_server.protocol.messages import (
+            MessageType,
+            ServiceMessage,
+            MapTileResponsePayload,
+            TileFormat,
+        )
+        from companion_server.protocol.serialization import (
+            encode_service_fields,
+            decode_service_fields,
+        )
+
+        response_msg = ServiceMessage(
+            msg_type=MessageType.MAP_TILE_RESPONSE,
+            service="maps",
+            payload=MapTileResponsePayload(
+                z=14,
+                x=8529,
+                y=5975,
+                format=TileFormat.MONO_RLE,
+                chunk_index=0,
+                total_chunks=0,
+                data=b"",
+                error="Tile not found",
+            ),
+            request_id=42,
+        )
+
+        fields = encode_service_fields(response_msg)
+        decoded_response = decode_service_fields(fields)
+
+        assert decoded_response.payload.error == "Tile not found"
+        assert decoded_response.payload.data == b""
+
+    def test_map_geocode_request_roundtrip(self):
+        """Test geocode request encoding/decoding."""
+        from companion_server.protocol.messages import (
+            MessageType,
+            ServiceMessage,
+            MapGeocodeRequestPayload,
+        )
+        from companion_server.protocol.serialization import (
+            encode_service_fields,
+            decode_service_fields,
+        )
+
+        request_msg = ServiceMessage(
+            msg_type=MessageType.MAP_GEOCODE_REQUEST,
+            service="maps",
+            payload=MapGeocodeRequestPayload(
+                query="Golden Gate Bridge",
+                bias_lat=377749000,  # 37.7749 * 1e7
+                bias_lon=-1224194000,  # -122.4194 * 1e7
+                max_results=5,
+            ),
+            request_id=100,
+        )
+
+        fields = encode_service_fields(request_msg)
+        decoded_request = decode_service_fields(fields)
+
+        assert decoded_request.msg_type == MessageType.MAP_GEOCODE_REQUEST
+        assert decoded_request.payload.query == "Golden Gate Bridge"
+        assert decoded_request.payload.bias_lat == 377749000
+        assert decoded_request.payload.bias_lon == -1224194000
+        assert decoded_request.payload.max_results == 5
+
+    def test_map_geocode_response_with_results(self):
+        """Test geocode response with results."""
+        from companion_server.protocol.messages import (
+            MessageType,
+            ServiceMessage,
+            MapGeocodeResponsePayload,
+            MapGeocodeResult,
+        )
+        from companion_server.protocol.serialization import (
+            encode_service_fields,
+            decode_service_fields,
+        )
+
+        response_msg = ServiceMessage(
+            msg_type=MessageType.MAP_GEOCODE_RESPONSE,
+            service="maps",
+            payload=MapGeocodeResponsePayload(
+                query="Golden Gate Bridge",
+                results=[
+                    MapGeocodeResult(
+                        display_name="Golden Gate Bridge, San Francisco, CA",
+                        lat=378079900,  # 37.80799 * 1e7
+                        lon=-1224750800,  # -122.47508 * 1e7
+                        type="landmark",
+                    ),
+                    MapGeocodeResult(
+                        display_name="Golden Gate Park, San Francisco, CA",
+                        lat=377699000,
+                        lon=-1224758000,
+                        type="park",
+                    ),
+                ],
+                error=None,
+            ),
+            request_id=100,
+        )
+
+        fields = encode_service_fields(response_msg)
+        decoded_response = decode_service_fields(fields)
+
+        assert decoded_response.msg_type == MessageType.MAP_GEOCODE_RESPONSE
+        assert decoded_response.payload.query == "Golden Gate Bridge"
+        assert len(decoded_response.payload.results) == 2
+        assert decoded_response.payload.results[0].display_name == "Golden Gate Bridge, San Francisco, CA"
+        assert decoded_response.payload.results[0].type == "landmark"
+        assert decoded_response.payload.error is None
+
+    def test_map_route_request_roundtrip(self):
+        """Test route request encoding/decoding."""
+        from companion_server.protocol.messages import (
+            MessageType,
+            ServiceMessage,
+            MapRouteRequestPayload,
+            TravelMode,
+        )
+        from companion_server.protocol.serialization import (
+            encode_service_fields,
+            decode_service_fields,
+        )
+
+        request_msg = ServiceMessage(
+            msg_type=MessageType.MAP_ROUTE_REQUEST,
+            service="maps",
+            payload=MapRouteRequestPayload(
+                start_lat=377749000,
+                start_lon=-1224194000,
+                end_lat=378079900,
+                end_lon=-1224750800,
+                mode=TravelMode.WALK,
+            ),
+            request_id=200,
+        )
+
+        fields = encode_service_fields(request_msg)
+        decoded_request = decode_service_fields(fields)
+
+        assert decoded_request.msg_type == MessageType.MAP_ROUTE_REQUEST
+        assert decoded_request.payload.start_lat == 377749000
+        assert decoded_request.payload.start_lon == -1224194000
+        assert decoded_request.payload.end_lat == 378079900
+        assert decoded_request.payload.end_lon == -1224750800
+        assert decoded_request.payload.mode == TravelMode.WALK
+
+    def test_map_route_response_with_instructions(self):
+        """Test route response with turn-by-turn instructions."""
+        from companion_server.protocol.messages import (
+            MessageType,
+            ServiceMessage,
+            MapRouteResponsePayload,
+            MapRouteInstruction,
+        )
+        from companion_server.protocol.serialization import (
+            encode_service_fields,
+            decode_service_fields,
+        )
+
+        response_msg = ServiceMessage(
+            msg_type=MessageType.MAP_ROUTE_RESPONSE,
+            service="maps",
+            payload=MapRouteResponsePayload(
+                points=[377749000, -1224194000, 377800000, -1224300000, 378079900, -1224750800],
+                instructions=[
+                    MapRouteInstruction(distance_m=500, maneuver="straight", street="Market St"),
+                    MapRouteInstruction(distance_m=300, maneuver="turn-left", street="Van Ness Ave"),
+                    MapRouteInstruction(distance_m=0, maneuver="arrive", street=""),
+                ],
+                total_distance_m=800,
+                total_time_s=600,
+                error=None,
+            ),
+            request_id=200,
+        )
+
+        fields = encode_service_fields(response_msg)
+        decoded_response = decode_service_fields(fields)
+
+        assert decoded_response.msg_type == MessageType.MAP_ROUTE_RESPONSE
+        assert len(decoded_response.payload.points) == 6
+        assert len(decoded_response.payload.instructions) == 3
+        assert decoded_response.payload.instructions[0].maneuver == "straight"
+        assert decoded_response.payload.instructions[1].maneuver == "turn-left"
+        assert decoded_response.payload.total_distance_m == 800
+        assert decoded_response.payload.total_time_s == 600
+
+    def test_all_travel_modes(self):
+        """Test all travel modes encode/decode correctly."""
+        from companion_server.protocol.messages import (
+            MessageType,
+            ServiceMessage,
+            MapRouteRequestPayload,
+            TravelMode,
+        )
+        from companion_server.protocol.serialization import (
+            encode_service_fields,
+            decode_service_fields,
+        )
+
+        for mode in [TravelMode.WALK, TravelMode.BIKE, TravelMode.CAR]:
+            request_msg = ServiceMessage(
+                msg_type=MessageType.MAP_ROUTE_REQUEST,
+                service="maps",
+                payload=MapRouteRequestPayload(
+                    start_lat=0,
+                    start_lon=0,
+                    end_lat=0,
+                    end_lon=0,
+                    mode=mode,
+                ),
+                request_id=1,
+            )
+
+            fields = encode_service_fields(request_msg)
+            decoded = decode_service_fields(fields)
+
+            assert decoded.payload.mode == mode, f"Failed for travel mode {mode}"
+
 
 class TestProtocolCompatibility:
     """Tests that don't require full E2E but verify protocol compatibility."""
@@ -149,6 +595,12 @@ class TestProtocolCompatibility:
             NTPResponsePayload,
             SearchRequestPayload,
             SearchResponsePayload,
+            MapTileRequestPayload,
+            MapTileResponsePayload,
+            MapRouteRequestPayload,
+            MapRouteResponsePayload,
+            MapGeocodeRequestPayload,
+            MapGeocodeResponsePayload,
         )
         from companion_server.protocol.serialization import (
             encode_service_fields,
@@ -159,6 +611,8 @@ class TestProtocolCompatibility:
         assert MessageType.TRUST_OFFER == 0x01
         assert MessageType.NTP_REQUEST == 0x10
         assert MessageType.SEARCH_REQUEST == 0x20
+        assert MessageType.MAP_TILE_REQUEST == 0x30
+        assert MessageType.MAP_GEOCODE_REQUEST == 0x35
 
     def test_service_message_roundtrip(self):
         """Verify service messages can be encoded and decoded."""
@@ -178,7 +632,7 @@ class TestProtocolCompatibility:
             service="trust",
             payload=TrustOfferPayload(
                 server_name="TestServer",
-                services=["ntp", "search"],
+                services=["ntp", "search", "maps"],
             ),
             request_id=12345,
         )
@@ -193,7 +647,7 @@ class TestProtocolCompatibility:
         assert decoded.service == original.service
         assert decoded.request_id == original.request_id
         assert decoded.payload.server_name == "TestServer"
-        assert decoded.payload.services == ["ntp", "search"]
+        assert decoded.payload.services == ["ntp", "search", "maps"]
 
     def test_all_message_types_encode_decode(self):
         """Verify all message types can be encoded and decoded."""
@@ -207,6 +661,16 @@ class TestProtocolCompatibility:
             SearchRequestPayload,
             SearchResponsePayload,
             SearchResult,
+            MapTileRequestPayload,
+            MapTileResponsePayload,
+            MapRouteRequestPayload,
+            MapRouteResponsePayload,
+            MapRouteInstruction,
+            MapGeocodeRequestPayload,
+            MapGeocodeResponsePayload,
+            MapGeocodeResult,
+            TileFormat,
+            TravelMode,
         )
         from companion_server.protocol.serialization import (
             encode_service_fields,
@@ -214,15 +678,49 @@ class TestProtocolCompatibility:
         )
 
         test_cases = [
-            (MessageType.TRUST_OFFER, "trust", TrustOfferPayload("Server", ["ntp"])),
+            # Trust messages
+            (MessageType.TRUST_OFFER, "trust", TrustOfferPayload("Server", ["ntp", "maps"])),
             (MessageType.TRUST_ACCEPT, "trust", TrustAcceptPayload("Device")),
+            # NTP messages
             (MessageType.NTP_REQUEST, "ntp", NTPRequestPayload(12345)),
             (MessageType.NTP_RESPONSE, "ntp", NTPResponsePayload(1700000000, 12345)),
-            (MessageType.SEARCH_REQUEST, "search", SearchRequestPayload("test", 5)),
+            # Search messages
+            (MessageType.SEARCH_REQUEST, "search", SearchRequestPayload("test", 5, False)),
+            (MessageType.SEARCH_REQUEST, "search", SearchRequestPayload("ai test", 3, True)),
             (MessageType.SEARCH_RESPONSE, "search", SearchResponsePayload(
                 "test",
                 [SearchResult("Title", "http://url", "Snippet")],
                 None,
+                None,
+            )),
+            (MessageType.SEARCH_RESPONSE, "search", SearchResponsePayload(
+                "ai test",
+                [SearchResult("Title", "http://url", "Snippet")],
+                None,
+                "This is an AI-generated summary.",
+            )),
+            # Map tile messages
+            (MessageType.MAP_TILE_REQUEST, "maps", MapTileRequestPayload(14, 8529, 5975, TileFormat.MONO_RLE)),
+            (MessageType.MAP_TILE_RESPONSE, "maps", MapTileResponsePayload(
+                14, 8529, 5975, TileFormat.MONO_RLE, 0, 1, b"\x00\xFF", None
+            )),
+            # Map route messages
+            (MessageType.MAP_ROUTE_REQUEST, "maps", MapRouteRequestPayload(
+                377749000, -1224194000, 378079900, -1224750800, TravelMode.WALK
+            )),
+            (MessageType.MAP_ROUTE_RESPONSE, "maps", MapRouteResponsePayload(
+                [377749000, -1224194000, 378079900, -1224750800],
+                [MapRouteInstruction(500, "straight", "Market St")],
+                500, 300, None
+            )),
+            # Map geocode messages
+            (MessageType.MAP_GEOCODE_REQUEST, "maps", MapGeocodeRequestPayload(
+                "San Francisco", 377749000, -1224194000, 5
+            )),
+            (MessageType.MAP_GEOCODE_RESPONSE, "maps", MapGeocodeResponsePayload(
+                "San Francisco",
+                [MapGeocodeResult("San Francisco, CA", 377749000, -1224194000, "city")],
+                None
             )),
         ]
 
@@ -239,3 +737,23 @@ class TestProtocolCompatibility:
 
             assert decoded.msg_type == msg_type, f"Failed for {msg_type}"
             assert decoded.service == service, f"Failed for {msg_type}"
+
+
+class TestEmulatorWithMaxFrames:
+    """Tests that use --max-frames for deterministic runs.
+
+    NOTE: The --max-frames feature currently doesn't work because the emulator's
+    register_ui_task() blocks forever (runs the UI loop directly), so the frame
+    counter in main.cpp never executes. These tests are skipped until the emulator
+    architecture is updated to support programmatic exit.
+    """
+
+    @pytest.mark.skip(reason="--max-frames not working: UI task blocks forever")
+    def test_emulator_exits_after_max_frames(self, temp_data_dir, xvfb_display):
+        """Verify emulator exits cleanly after max frames."""
+        pass
+
+    @pytest.mark.skip(reason="--max-frames not working: UI task blocks forever")
+    def test_emulator_auto_launch_app_and_exit(self, temp_data_dir, xvfb_display):
+        """Test auto-launching an app and exiting after frames."""
+        pass

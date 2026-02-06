@@ -5,9 +5,9 @@
 #include <cstdio>
 #include <cstring>
 
-// Display dimensions (match e-ink display)
-#define DISP_HOR_RES 320
-#define DISP_VER_RES 240
+// Display dimensions (match T-Deck Pro e-ink display: 240x320 portrait)
+#define DISP_HOR_RES 240
+#define DISP_VER_RES 320
 #define ZOOM_FACTOR 2  // 2x scaling for better visibility
 
 // Static pointers for LVGL callbacks

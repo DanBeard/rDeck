@@ -533,3 +533,216 @@ class TestSearchServiceIntegration:
         assert response.query == "python programming"
         assert len(response.results) > 0
         assert response.error is None
+
+
+class TestSearchServiceAISummary:
+    """Tests for AI summary functionality in search service."""
+
+    @pytest.fixture
+    def config_no_ai(self):
+        """Config with AI summary disabled."""
+        config = Mock(spec=Config)
+        config.search_max_results = 5
+        config.ai_summary_enabled = False
+        config.ai_summary_model_path = None
+        config.ai_summary_max_tokens = 256
+        config.ai_summary_context_size = 2048
+        return config
+
+    @pytest.fixture
+    def config_ai_enabled(self):
+        """Config with AI summary enabled but no model path."""
+        config = Mock(spec=Config)
+        config.search_max_results = 5
+        config.ai_summary_enabled = True
+        config.ai_summary_model_path = None  # No actual model
+        config.ai_summary_max_tokens = 256
+        config.ai_summary_context_size = 2048
+        return config
+
+    @pytest.fixture
+    def service_no_ai(self, config_no_ai):
+        return SearchService(config_no_ai)
+
+    @pytest.fixture
+    def service_ai_enabled(self, config_ai_enabled):
+        return SearchService(config_ai_enabled)
+
+    def test_ai_summary_not_available_when_disabled(self, service_no_ai):
+        """Test that AI summary is not available when disabled in config."""
+        assert service_no_ai.ai_summary_available is False
+
+    def test_ai_summary_not_available_without_model(self, service_ai_enabled):
+        """Test that AI summary is not available without model path."""
+        assert service_ai_enabled.ai_summary_available is False
+
+    def test_request_without_ai_summary_flag(self, service_no_ai):
+        """Test search request without AI summary flag."""
+        from companion_server.protocol.messages import SearchResult
+
+        mock_results = [
+            SearchResult("Result 1", "http://example.com/1", "Snippet 1"),
+        ]
+
+        request = SearchRequestPayload(query="test", max_results=5, ai_summary=False)
+
+        with patch.object(service_no_ai, '_search_duckduckgo', return_value=mock_results):
+            response = service_no_ai.handle_request(request)
+
+        assert response.summary is None
+        assert len(response.results) == 1
+
+    def test_request_with_ai_summary_flag_but_unavailable(self, service_no_ai):
+        """Test that requesting AI summary when unavailable returns None."""
+        from companion_server.protocol.messages import SearchResult
+
+        mock_results = [
+            SearchResult("Result 1", "http://example.com/1", "Snippet 1"),
+        ]
+
+        request = SearchRequestPayload(query="test", max_results=5, ai_summary=True)
+
+        with patch.object(service_no_ai, '_search_duckduckgo', return_value=mock_results):
+            response = service_no_ai.handle_request(request)
+
+        # Summary should be None since AI is not available
+        assert response.summary is None
+        assert len(response.results) == 1
+
+    def test_ai_summary_protocol_serialization(self):
+        """Test that AI summary field serializes correctly."""
+        from companion_server.protocol.serialization import _encode_payload, _decode_payload
+        from companion_server.protocol.messages import MessageType, SearchResult
+
+        # Create response with summary
+        response = SearchResponsePayload(
+            query="what is python",
+            results=[SearchResult("Python.org", "https://python.org", "Official site")],
+            error=None,
+            summary="Python is a high-level programming language known for readability.",
+        )
+
+        # Encode and decode
+        encoded = _encode_payload(MessageType.SEARCH_RESPONSE, response)
+        decoded = _decode_payload(MessageType.SEARCH_RESPONSE, encoded)
+
+        assert decoded.query == "what is python"
+        assert len(decoded.results) == 1
+        assert decoded.summary == "Python is a high-level programming language known for readability."
+        assert decoded.error is None
+
+    def test_ai_summary_request_protocol_serialization(self):
+        """Test that AI summary request field serializes correctly."""
+        from companion_server.protocol.serialization import _encode_payload, _decode_payload
+        from companion_server.protocol.messages import MessageType
+        import msgpack
+
+        # Create request with ai_summary=True
+        request = SearchRequestPayload(query="test query", max_results=3, ai_summary=True)
+
+        # Encode
+        encoded = _encode_payload(MessageType.SEARCH_REQUEST, request)
+
+        # Verify raw msgpack contains ai_summary
+        decoded_raw = msgpack.unpackb(encoded, raw=False)
+        assert "ai_summary" in decoded_raw
+        assert decoded_raw["ai_summary"] is True
+
+        # Decode through protocol
+        decoded = _decode_payload(MessageType.SEARCH_REQUEST, encoded)
+        assert decoded.ai_summary is True
+
+    def test_ai_summary_default_false(self):
+        """Test that ai_summary defaults to False."""
+        request = SearchRequestPayload(query="test")
+        assert request.ai_summary is False
+
+    def test_response_summary_default_none(self):
+        """Test that response summary defaults to None."""
+        response = SearchResponsePayload(query="test")
+        assert response.summary is None
+
+
+class TestSearchServiceWithMockLLM:
+    """Tests for AI summary with mocked LLM."""
+
+    @pytest.fixture
+    def config_with_llm(self):
+        config = Mock(spec=Config)
+        config.search_max_results = 5
+        config.ai_summary_enabled = True
+        config.ai_summary_model_path = "/path/to/model.gguf"
+        config.ai_summary_max_tokens = 256
+        config.ai_summary_context_size = 2048
+        return config
+
+    def test_generate_summary_with_mock_llm(self, config_with_llm):
+        """Test AI summary generation with mocked LLM."""
+        from companion_server.protocol.messages import SearchResult
+
+        # Mock the Llama import and instance
+        with patch.dict('sys.modules', {'llama_cpp': MagicMock()}):
+            with patch('companion_server.services.search_service.LLAMA_AVAILABLE', True):
+                with patch('companion_server.services.search_service.Llama') as mock_llama_class:
+                    # Create mock LLM instance
+                    mock_llm = MagicMock()
+                    mock_llm.return_value = {
+                        "choices": [{"text": "This is a generated summary about Python."}]
+                    }
+                    mock_llama_class.return_value = mock_llm
+
+                    service = SearchService(config_with_llm)
+                    service._llm = mock_llm
+
+                    # Test results
+                    results = [
+                        SearchResult("Python.org", "https://python.org", "Official Python site"),
+                        SearchResult("Python Tutorial", "https://tutorial.com", "Learn Python"),
+                    ]
+
+                    summary = service._generate_summary("what is python", results)
+
+                    # Verify LLM was called
+                    mock_llm.assert_called_once()
+                    assert summary == "This is a generated summary about Python."
+
+    def test_generate_summary_handles_llm_error(self, config_with_llm):
+        """Test that LLM errors are handled gracefully."""
+        from companion_server.protocol.messages import SearchResult
+
+        with patch.dict('sys.modules', {'llama_cpp': MagicMock()}):
+            with patch('companion_server.services.search_service.LLAMA_AVAILABLE', True):
+                with patch('companion_server.services.search_service.Llama') as mock_llama_class:
+                    mock_llm = MagicMock()
+                    mock_llm.side_effect = RuntimeError("LLM inference failed")
+                    mock_llama_class.return_value = mock_llm
+
+                    service = SearchService(config_with_llm)
+                    service._llm = mock_llm
+
+                    results = [
+                        SearchResult("Test", "https://test.com", "Test snippet"),
+                    ]
+
+                    summary = service._generate_summary("test", results)
+
+                    # Should return None on error, not raise
+                    assert summary is None
+
+    def test_generate_summary_empty_results(self, config_with_llm):
+        """Test that empty results return None summary."""
+        with patch.dict('sys.modules', {'llama_cpp': MagicMock()}):
+            with patch('companion_server.services.search_service.LLAMA_AVAILABLE', True):
+                with patch('companion_server.services.search_service.Llama') as mock_llama_class:
+                    mock_llm = MagicMock()
+                    mock_llama_class.return_value = mock_llm
+
+                    service = SearchService(config_with_llm)
+                    service._llm = mock_llm
+
+                    summary = service._generate_summary("test", [])
+
+                    # Should return None for empty results
+                    assert summary is None
+                    # LLM should not be called
+                    mock_llm.assert_not_called()

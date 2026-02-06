@@ -1,4 +1,4 @@
-"""Search service - proxies web search queries."""
+"""Search service - proxies web search queries with optional AI summaries."""
 
 import logging
 from typing import Optional
@@ -11,11 +11,20 @@ from ..config import Config
 
 logger = logging.getLogger(__name__)
 
+# Optional llama-cpp-python import for AI summary
+try:
+    from llama_cpp import Llama
+    LLAMA_AVAILABLE = True
+except ImportError:
+    LLAMA_AVAILABLE = False
+    Llama = None
+
 
 class SearchService(BaseService):
-    """Web search proxy service.
+    """Web search proxy service with optional AI summary.
 
-    Proxies search queries to DuckDuckGo and returns results.
+    Proxies search queries to DuckDuckGo and optionally generates
+    AI summaries using a local LLM.
     """
 
     # DuckDuckGo HTML API (lite version for simpler parsing)
@@ -29,10 +38,44 @@ class SearchService(BaseService):
                 "User-Agent": "Mozilla/5.0 (compatible; rDeck Companion Server)"
             },
         )
+        self._llm: Optional[Llama] = None
+        self._init_llm()
+
+    def _init_llm(self):
+        """Initialize LLM for AI summaries if configured."""
+        if not self.config.ai_summary_enabled:
+            logger.info("AI summary disabled in config")
+            return
+
+        if not LLAMA_AVAILABLE:
+            logger.warning("AI summary enabled but llama-cpp-python not installed")
+            return
+
+        if not self.config.ai_summary_model_path:
+            logger.warning("AI summary enabled but no model path configured")
+            return
+
+        try:
+            logger.info(f"Loading LLM from {self.config.ai_summary_model_path}")
+            self._llm = Llama(
+                model_path=self.config.ai_summary_model_path,
+                n_ctx=self.config.ai_summary_context_size,
+                n_threads=4,
+                verbose=False,
+            )
+            logger.info("LLM loaded successfully")
+        except Exception as e:
+            logger.error(f"Failed to load LLM: {e}")
+            self._llm = None
 
     @property
     def name(self) -> str:
         return "search"
+
+    @property
+    def ai_summary_available(self) -> bool:
+        """Check if AI summary is available."""
+        return self._llm is not None
 
     def handle_request(self, payload: SearchRequestPayload) -> SearchResponsePayload:
         """Handle search request and return results.
@@ -41,16 +84,22 @@ class SearchService(BaseService):
             payload: Search request with query
 
         Returns:
-            Search response with results or error
+            Search response with results and optional AI summary
         """
         try:
             max_results = min(payload.max_results, self.config.search_max_results)
             results = self._search_duckduckgo(payload.query, max_results)
 
+            # Generate AI summary if requested and available
+            summary = None
+            if payload.ai_summary and self._llm is not None:
+                summary = self._generate_summary(payload.query, results)
+
             return SearchResponsePayload(
                 query=payload.query,
                 results=results,
                 error=None,
+                summary=summary,
             )
 
         except Exception as e:
@@ -59,7 +108,63 @@ class SearchService(BaseService):
                 query=payload.query,
                 results=[],
                 error=str(e),
+                summary=None,
             )
+
+    def _generate_summary(self, query: str, results: list[SearchResult]) -> Optional[str]:
+        """Generate AI summary from search results.
+
+        Args:
+            query: The search query
+            results: Search results to summarize
+
+        Returns:
+            AI-generated summary or None if failed
+        """
+        if not self._llm or not results:
+            return None
+
+        try:
+            # Build context from search results
+            context_parts = []
+            for i, r in enumerate(results[:5], 1):  # Limit to 5 results for context
+                context_parts.append(f"{i}. {r.title}\n{r.snippet}")
+
+            context = "\n\n".join(context_parts)
+
+            # Create prompt for summarization
+            prompt = f"""Based on the following search results, provide a concise answer to the question: "{query}"
+
+Search Results:
+{context}
+
+Provide a direct, helpful answer in 2-3 sentences. Focus on the most relevant information.
+
+Answer:"""
+
+            # Generate response
+            response = self._llm(
+                prompt,
+                max_tokens=self.config.ai_summary_max_tokens,
+                temperature=0.3,
+                stop=["\n\n", "Search Results:", "Question:"],
+            )
+
+            summary = response["choices"][0]["text"].strip()
+
+            # Clean up the summary
+            if summary:
+                # Remove any leading/trailing whitespace and ensure it's not empty
+                summary = summary.strip()
+                if len(summary) < 10:  # Too short, probably garbage
+                    return None
+
+            logger.info(f"Generated AI summary for query: {query[:50]}...")
+            return summary
+
+        except Exception as e:
+            logger.error(f"AI summary generation failed: {e}")
+            return None
 
     def _search_duckduckgo(self, query: str, max_results: int) -> list[SearchResult]:
         """Perform search via DuckDuckGo HTML API."""

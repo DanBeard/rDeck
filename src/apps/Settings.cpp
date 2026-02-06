@@ -23,23 +23,26 @@ static JsonDocument _root_settings;
 }
 
 /*virtual */ void Settings::stop() {
-     // apply our local settiing
-     JsonString timezone_val = _settings[timezone];
-     time_t epoch_val = _settings[epoch];
-     _retos->time.setPosixTimezone(timezone_val.c_str());
-     if(epoch_val > 0) {
-         _retos->time.setTime(epoch_val);
-     }
-    
+    // apply our local settings (with null checks to avoid crashes)
+    JsonString timezone_val = _settings[timezone];
+    time_t epoch_val = _settings[epoch];
 
-     // apply the settings registered by services
-     for(auto sInfo: _retos->serviceInfo()) {
+    if (!timezone_val.isNull()) {
+        _retos->time.setPosixTimezone(timezone_val.c_str());
+    }
+
+    if (epoch_val > 0) {
+        _retos->time.setTime(epoch_val);
+    }
+
+    // apply the settings registered by services
+    for (auto sInfo: _retos->serviceInfo()) {
         sInfo.applySettings();
     }
 
     // save and clear settings since JSON changes lead to garbage memleak
     Settings::saveSettings();
-    _root_settings.clear();   
+    _root_settings.clear();
 }
  
 
@@ -107,8 +110,8 @@ void Settings::drawScreen() {
     lv_obj_set_flex_flow(settings_column, LV_FLEX_FLOW_ROW_WRAP);
     lv_obj_set_style_pad_left(settings_column, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_pad_right(settings_column, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-    // date & time
 
+    // date & time
     drawTimeDateSection();
 
     // Trusted servers section
@@ -121,7 +124,6 @@ void Settings::drawScreen() {
     for(auto sInfo: _retos->serviceInfo()) {
         sInfo.drawSettings(settings_column, this);
     }
-
 }
 
 void functor_callback(lv_event_t * e) {
@@ -357,7 +359,21 @@ void Settings::drawTrustedServerRow(const Retcon::Service::TrustedServer& server
     }
 }
 
+// Async callback to redraw after event processing completes
+static void asyncRedrawCallback(void* settings_ptr) {
+    Settings* settings = (Settings*)settings_ptr;
+    if (settings) {
+        settings->doRedrawTrustedServersSection();
+    }
+}
+
 void Settings::redrawTrustedServersSection() {
+    // Defer redraw to avoid destroying objects while their event callbacks are running
+    // This prevents use-after-free when the button that triggered the event is deleted
+    lv_async_call(asyncRedrawCallback, this);
+}
+
+void Settings::doRedrawTrustedServersSection() {
     // Simple approach: just redraw the entire screen
     // A more sophisticated approach would track the section container and only redraw that
     lv_obj_clean(screen);

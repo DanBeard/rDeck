@@ -306,11 +306,51 @@ Run: `pio test -e test_native`
 
 Run: `cd companion-server && .venv/bin/pytest`
 
+### UI Tests (`test/ui/`)
+
+Visual UI testing framework for capturing and analyzing emulator screenshots.
+
+**Claude agents can see screenshots!** Use this to review UI, debug visual issues, and verify changes.
+
+| File | Purpose |
+|------|---------|
+| `capture.py` | Screenshot capture utilities (Xvfb + xwd + GraphicsMagick) |
+| `test_ui.py` | Pytest-based UI tests |
+| `baseline/` | Baseline screenshots for regression testing |
+
+**Quick Screenshot Capture:**
+```bash
+# Start Xvfb virtual display
+Xvfb :99 -screen 0 640x480x24 &
+sleep 2
+
+# Run emulator with specific app
+DISPLAY=:99 .pio/build/emulator_64bits/program --launch-app Settings &
+sleep 5
+
+# Capture screenshot
+DISPLAY=:99 xwd -root | gm convert xwd:- screenshot.png
+
+# View with Claude's Read tool - it can see images!
+```
+
+**Python API:**
+```python
+from test.ui.capture import EmulatorCapture
+
+with EmulatorCapture() as emu:
+    emu.launch_and_capture("Settings", "settings.png")
+```
+
+**Run UI tests:** `cd test/ui && python -m pytest test_ui.py -v`
+
+**Capture baselines:** `cd test/ui && python test_ui.py --capture-baselines`
+
 ## Dependencies
 
 ### C++ (PlatformIO)
 - LVGL 8.3.x - UI framework
-- microReticulum - Reticulum Network Stack (symlinked from `../microReticulum`)
+- microReticulum - Reticulum Network Stack (from `DanBeard/microReticulum#aes256-clean`)
 - ArduinoJson - JSON/MsgPack serialization
 - RadioLib - LoRa radio
 - Local libraries in `lib/` (GxEPD2, TinyGPSPlus, XPowersLib, etc.)

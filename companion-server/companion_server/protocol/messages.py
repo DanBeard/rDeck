@@ -21,6 +21,14 @@ class MessageType(IntEnum):
     SEARCH_REQUEST = 0x20
     SEARCH_RESPONSE = 0x21
 
+    # Maps service
+    MAP_TILE_REQUEST = 0x30
+    MAP_TILE_RESPONSE = 0x31
+    MAP_ROUTE_REQUEST = 0x33
+    MAP_ROUTE_RESPONSE = 0x34
+    MAP_GEOCODE_REQUEST = 0x35
+    MAP_GEOCODE_RESPONSE = 0x36
+
 
 @dataclass
 class ServiceMessage:
@@ -111,6 +119,7 @@ class SearchRequestPayload:
 
     query: str
     max_results: int = 5
+    ai_summary: bool = False  # Request AI-generated summary instead of raw results
 
 
 @dataclass
@@ -131,4 +140,127 @@ class SearchResponsePayload:
 
     query: str
     results: list[SearchResult] = field(default_factory=list)
+    error: Optional[str] = None
+    summary: Optional[str] = None  # AI-generated summary (if requested and available)
+
+
+# Maps service payloads
+
+
+class TileFormat(IntEnum):
+    """Tile format enum for map tiles."""
+
+    MONO_RLE = 0  # 1-bit dithered, RLE compressed (default)
+    RAW_1BIT = 1  # 1-bit dithered, uncompressed (128x128 = 2KB)
+
+
+class TravelMode(IntEnum):
+    """Travel mode for routing."""
+
+    WALK = 0
+    BIKE = 1
+    CAR = 2
+
+
+@dataclass
+class MapTileRequestPayload:
+    """Payload for MAP_TILE_REQUEST message.
+
+    Device -> Server: Request a map tile
+    """
+
+    z: int  # Zoom level (typically 10-16)
+    x: int  # Tile X coordinate
+    y: int  # Tile Y coordinate
+    format: TileFormat = TileFormat.MONO_RLE
+
+
+@dataclass
+class MapTileResponsePayload:
+    """Payload for MAP_TILE_RESPONSE message.
+
+    Server -> Device: Return map tile data
+    Supports chunking for large tiles over LoRa
+    """
+
+    z: int
+    x: int
+    y: int
+    format: TileFormat
+    chunk_index: int  # Current chunk (0-based)
+    total_chunks: int  # Total chunks for this tile
+    data: bytes  # RLE-compressed 1-bit tile data (chunk)
+    error: Optional[str] = None
+
+
+@dataclass
+class MapRouteRequestPayload:
+    """Payload for MAP_ROUTE_REQUEST message.
+
+    Device -> Server: Request route between two points
+    Coordinates stored as int32 * 1e7 for precision without floats
+    """
+
+    start_lat: int  # Latitude * 1e7
+    start_lon: int  # Longitude * 1e7
+    end_lat: int
+    end_lon: int
+    mode: TravelMode = TravelMode.WALK
+
+
+@dataclass
+class MapRouteInstruction:
+    """A turn-by-turn instruction."""
+
+    distance_m: int  # Distance in meters to this maneuver
+    maneuver: str  # "turn-left", "turn-right", "straight", "arrive", etc.
+    street: str  # Street name (may be empty)
+
+
+@dataclass
+class MapRouteResponsePayload:
+    """Payload for MAP_ROUTE_RESPONSE message.
+
+    Server -> Device: Return route with directions
+    """
+
+    points: list[int]  # Lat/lon pairs * 1e7 (alternating: lat0, lon0, lat1, lon1, ...)
+    instructions: list[MapRouteInstruction] = field(default_factory=list)
+    total_distance_m: int = 0  # Total route distance in meters
+    total_time_s: int = 0  # Estimated time in seconds
+    error: Optional[str] = None
+
+
+@dataclass
+class MapGeocodeRequestPayload:
+    """Payload for MAP_GEOCODE_REQUEST message.
+
+    Device -> Server: Search by address/place name
+    """
+
+    query: str  # Search query (address, place name, etc.)
+    bias_lat: Optional[int] = None  # Optional: bias results near this lat * 1e7
+    bias_lon: Optional[int] = None  # Optional: bias results near this lon * 1e7
+    max_results: int = 5
+
+
+@dataclass
+class MapGeocodeResult:
+    """A single geocode result."""
+
+    display_name: str  # Full formatted address/name
+    lat: int  # Latitude * 1e7
+    lon: int  # Longitude * 1e7
+    type: str  # Place type: "city", "street", "house", "poi", etc.
+
+
+@dataclass
+class MapGeocodeResponsePayload:
+    """Payload for MAP_GEOCODE_RESPONSE message.
+
+    Server -> Device: Return geocode results
+    """
+
+    query: str
+    results: list[MapGeocodeResult] = field(default_factory=list)
     error: Optional[str] = None

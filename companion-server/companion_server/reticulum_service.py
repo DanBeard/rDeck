@@ -23,8 +23,12 @@ from .protocol import (
     NTPResponsePayload,
     SearchRequestPayload,
     SearchResponsePayload,
+    MapTileRequestPayload,
+    MapRouteRequestPayload,
+    MapGeocodeRequestPayload,
 )
 from .services import NTPService, SearchService
+from .services.maps_service import MapsService
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +99,7 @@ class ReticulumService:
         # Services
         self._ntp_service = NTPService()
         self._search_service = SearchService(config)
+        self._maps_service = MapsService(config) if config.maps_enabled else None
 
         # RNS/LXMF objects (initialized in start())
         self._reticulum: Optional[RNS.Reticulum] = None
@@ -381,6 +386,80 @@ class ReticulumService:
                 self._log(f"[Search] Error for '{device_name}': {response.error}")
             else:
                 self._log(f"[Search] Sent {len(response.results)} results to '{device_name}'")
+
+        elif msg.msg_type in (MessageType.MAP_TILE_REQUEST, MessageType.MAP_ROUTE_REQUEST, MessageType.MAP_GEOCODE_REQUEST):
+            # Maps service requests
+            if not self._maps_service:
+                self._log(f"[Maps] Service not enabled, ignoring request")
+                return
+
+            device = self.trust_manager.get_device(hash_hex)
+            device_name = device.name if device else hash_hex[:12] + "..."
+
+            # Upgrade to mutual trust if pending
+            if self.trust_manager.is_trust_pending(hash_hex):
+                self._log(f"[Maps] Device '{device_name}' sending request - upgrading to mutual trust")
+                self.trust_manager.accept_trust(hash_hex)
+
+            if not self.trust_manager.is_mutually_trusted(hash_hex):
+                self._log(f"[Maps] Rejected request from untrusted '{device_name}'")
+                return
+
+            if msg.msg_type == MessageType.MAP_TILE_REQUEST:
+                payload: MapTileRequestPayload = msg.payload
+                self._log(f"[Maps] '{device_name}' requesting tile z={payload.z} x={payload.x} y={payload.y}")
+                responses = self._maps_service._handle_tile_request(payload)
+                # Tile responses may be chunked
+                for response in responses:
+                    self._send_service_message(
+                        source_hash,
+                        ServiceMessage(
+                            msg_type=MessageType.MAP_TILE_RESPONSE,
+                            service="maps",
+                            payload=response,
+                            request_id=msg.request_id,
+                        ),
+                    )
+                if responses and responses[0].error:
+                    self._log(f"[Maps] Tile error for '{device_name}': {responses[0].error}")
+                else:
+                    self._log(f"[Maps] Sent tile ({len(responses)} chunks) to '{device_name}'")
+
+            elif msg.msg_type == MessageType.MAP_ROUTE_REQUEST:
+                payload: MapRouteRequestPayload = msg.payload
+                self._log(f"[Maps] '{device_name}' requesting route")
+                response = self._maps_service._handle_route_request(payload)
+                self._send_service_message(
+                    source_hash,
+                    ServiceMessage(
+                        msg_type=MessageType.MAP_ROUTE_RESPONSE,
+                        service="maps",
+                        payload=response,
+                        request_id=msg.request_id,
+                    ),
+                )
+                if response.error:
+                    self._log(f"[Maps] Route error for '{device_name}': {response.error}")
+                else:
+                    self._log(f"[Maps] Sent route ({len(response.points)//2} points) to '{device_name}'")
+
+            elif msg.msg_type == MessageType.MAP_GEOCODE_REQUEST:
+                payload: MapGeocodeRequestPayload = msg.payload
+                self._log(f"[Maps] '{device_name}' geocoding: '{payload.query}'")
+                response = self._maps_service._handle_geocode_request(payload)
+                self._send_service_message(
+                    source_hash,
+                    ServiceMessage(
+                        msg_type=MessageType.MAP_GEOCODE_RESPONSE,
+                        service="maps",
+                        payload=response,
+                        request_id=msg.request_id,
+                    ),
+                )
+                if response.error:
+                    self._log(f"[Maps] Geocode error for '{device_name}': {response.error}")
+                else:
+                    self._log(f"[Maps] Sent {len(response.results)} geocode results to '{device_name}'")
 
     def send_trust_offer(self, destination_hash: str):
         """Send a trust offer to a device."""

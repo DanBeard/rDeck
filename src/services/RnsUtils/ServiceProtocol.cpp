@@ -100,12 +100,14 @@ void SearchRequestPayload::deserialize(const uint8_t* data, size_t len) {
     deserializeMsgPack(doc, data, len);
     query = safeGetString(doc["query"]);
     max_results = doc["max_results"] | 5;
+    ai_summary = doc["ai_summary"] | false;
 }
 
 size_t SearchRequestPayload::serialize(uint8_t* buffer, size_t maxLen) const {
     JsonDocument doc;
     doc["query"] = query;
     doc["max_results"] = max_results;
+    doc["ai_summary"] = ai_summary;
     return serializeMsgPack(doc, buffer, maxLen);
 }
 
@@ -119,6 +121,7 @@ void SearchResponsePayload::deserialize(const uint8_t* data, size_t len) {
 
     query = safeGetString(doc["query"]);
     error = safeGetString(doc["error"]);
+    summary = safeGetString(doc["summary"]);
 
     results.clear();
     if (doc["results"].is<JsonArray>()) {
@@ -139,6 +142,9 @@ size_t SearchResponsePayload::serialize(uint8_t* buffer, size_t maxLen) const {
     if (!error.empty()) {
         doc["error"] = error;
     }
+    if (!summary.empty()) {
+        doc["summary"] = summary;
+    }
     JsonArray arr = doc["results"].to<JsonArray>();
     for (const auto& r : results) {
         JsonObject obj = arr.add<JsonObject>();
@@ -146,6 +152,223 @@ size_t SearchResponsePayload::serialize(uint8_t* buffer, size_t maxLen) const {
         obj["url"] = r.url;
         obj["snippet"] = r.snippet;
     }
+    return serializeMsgPack(doc, buffer, maxLen);
+}
+
+// ============================================================================
+// MapTileRequestPayload
+// ============================================================================
+
+void MapTileRequestPayload::deserialize(const uint8_t* data, size_t len) {
+    JsonDocument doc;
+    deserializeMsgPack(doc, data, len);
+    z = doc["z"] | 0;
+    x = doc["x"] | 0;
+    y = doc["y"] | 0;
+    format = static_cast<TileFormat>(doc["format"] | 0);
+}
+
+size_t MapTileRequestPayload::serialize(uint8_t* buffer, size_t maxLen) const {
+    JsonDocument doc;
+    doc["z"] = z;
+    doc["x"] = x;
+    doc["y"] = y;
+    doc["format"] = static_cast<uint8_t>(format);
+    return serializeMsgPack(doc, buffer, maxLen);
+}
+
+// ============================================================================
+// MapTileResponsePayload
+// ============================================================================
+
+void MapTileResponsePayload::deserialize(const uint8_t* dataPtr, size_t len) {
+    JsonDocument doc;
+    deserializeMsgPack(doc, dataPtr, len);
+    z = doc["z"] | 0;
+    x = doc["x"] | 0;
+    y = doc["y"] | 0;
+    format = static_cast<TileFormat>(doc["format"] | 0);
+    chunk_index = doc["chunk_index"] | 0;
+    total_chunks = doc["total_chunks"] | 1;
+    error = safeGetString(doc["error"]);
+
+    data.clear();
+    if (doc["data"].is<MsgPackBinary>()) {
+        MsgPackBinary bin = doc["data"].as<MsgPackBinary>();
+        const uint8_t* binData = static_cast<const uint8_t*>(bin.data());
+        data.assign(binData, binData + bin.size());
+    }
+}
+
+size_t MapTileResponsePayload::serialize(uint8_t* buffer, size_t maxLen) const {
+    JsonDocument doc;
+    doc["z"] = z;
+    doc["x"] = x;
+    doc["y"] = y;
+    doc["format"] = static_cast<uint8_t>(format);
+    doc["chunk_index"] = chunk_index;
+    doc["total_chunks"] = total_chunks;
+    if (!error.empty()) {
+        doc["error"] = error;
+    }
+    if (!data.empty()) {
+        doc["data"] = MsgPackBinary(data.data(), data.size());
+    }
+    return serializeMsgPack(doc, buffer, maxLen);
+}
+
+// ============================================================================
+// MapRouteRequestPayload
+// ============================================================================
+
+void MapRouteRequestPayload::deserialize(const uint8_t* data, size_t len) {
+    JsonDocument doc;
+    deserializeMsgPack(doc, data, len);
+    start_lat = doc["start_lat"] | 0;
+    start_lon = doc["start_lon"] | 0;
+    end_lat = doc["end_lat"] | 0;
+    end_lon = doc["end_lon"] | 0;
+    mode = static_cast<TravelMode>(doc["mode"] | 0);
+}
+
+size_t MapRouteRequestPayload::serialize(uint8_t* buffer, size_t maxLen) const {
+    JsonDocument doc;
+    doc["start_lat"] = start_lat;
+    doc["start_lon"] = start_lon;
+    doc["end_lat"] = end_lat;
+    doc["end_lon"] = end_lon;
+    doc["mode"] = static_cast<uint8_t>(mode);
+    return serializeMsgPack(doc, buffer, maxLen);
+}
+
+// ============================================================================
+// MapRouteResponsePayload
+// ============================================================================
+
+void MapRouteResponsePayload::deserialize(const uint8_t* data, size_t len) {
+    JsonDocument doc;
+    deserializeMsgPack(doc, data, len);
+
+    total_distance_m = doc["total_distance_m"] | 0;
+    total_time_s = doc["total_time_s"] | 0;
+    error = safeGetString(doc["error"]);
+
+    points.clear();
+    if (doc["points"].is<JsonArray>()) {
+        JsonArray arr = doc["points"];
+        for (size_t i = 0; i < arr.size(); i++) {
+            points.push_back(arr[i] | 0);
+        }
+    }
+
+    instructions.clear();
+    if (doc["instructions"].is<JsonArray>()) {
+        JsonArray arr = doc["instructions"];
+        for (size_t i = 0; i < arr.size(); i++) {
+            MapRouteInstruction inst;
+            inst.distance_m = arr[i]["distance_m"] | 0;
+            inst.maneuver = safeGetString(arr[i]["maneuver"]);
+            inst.street = safeGetString(arr[i]["street"]);
+            instructions.push_back(inst);
+        }
+    }
+}
+
+size_t MapRouteResponsePayload::serialize(uint8_t* buffer, size_t maxLen) const {
+    JsonDocument doc;
+    doc["total_distance_m"] = total_distance_m;
+    doc["total_time_s"] = total_time_s;
+    if (!error.empty()) {
+        doc["error"] = error;
+    }
+
+    JsonArray ptsArr = doc["points"].to<JsonArray>();
+    for (int32_t pt : points) {
+        ptsArr.add(pt);
+    }
+
+    JsonArray instArr = doc["instructions"].to<JsonArray>();
+    for (const auto& inst : instructions) {
+        JsonObject obj = instArr.add<JsonObject>();
+        obj["distance_m"] = inst.distance_m;
+        obj["maneuver"] = inst.maneuver;
+        obj["street"] = inst.street;
+    }
+
+    return serializeMsgPack(doc, buffer, maxLen);
+}
+
+// ============================================================================
+// MapGeocodeRequestPayload
+// ============================================================================
+
+void MapGeocodeRequestPayload::deserialize(const uint8_t* data, size_t len) {
+    JsonDocument doc;
+    deserializeMsgPack(doc, data, len);
+    query = safeGetString(doc["query"]);
+    max_results = doc["max_results"] | 5;
+
+    if (doc.containsKey("bias_lat") && doc.containsKey("bias_lon")) {
+        bias_lat = doc["bias_lat"] | 0;
+        bias_lon = doc["bias_lon"] | 0;
+        has_bias = true;
+    } else {
+        has_bias = false;
+    }
+}
+
+size_t MapGeocodeRequestPayload::serialize(uint8_t* buffer, size_t maxLen) const {
+    JsonDocument doc;
+    doc["query"] = query;
+    doc["max_results"] = max_results;
+    if (has_bias) {
+        doc["bias_lat"] = bias_lat;
+        doc["bias_lon"] = bias_lon;
+    }
+    return serializeMsgPack(doc, buffer, maxLen);
+}
+
+// ============================================================================
+// MapGeocodeResponsePayload
+// ============================================================================
+
+void MapGeocodeResponsePayload::deserialize(const uint8_t* data, size_t len) {
+    JsonDocument doc;
+    deserializeMsgPack(doc, data, len);
+
+    query = safeGetString(doc["query"]);
+    error = safeGetString(doc["error"]);
+
+    results.clear();
+    if (doc["results"].is<JsonArray>()) {
+        JsonArray arr = doc["results"];
+        for (size_t i = 0; i < arr.size(); i++) {
+            MapGeocodeResult r;
+            r.display_name = safeGetString(arr[i]["display_name"]);
+            r.lat = arr[i]["lat"] | 0;
+            r.lon = arr[i]["lon"] | 0;
+            r.type = safeGetString(arr[i]["type"]);
+            results.push_back(r);
+        }
+    }
+}
+
+size_t MapGeocodeResponsePayload::serialize(uint8_t* buffer, size_t maxLen) const {
+    JsonDocument doc;
+    doc["query"] = query;
+    if (!error.empty()) {
+        doc["error"] = error;
+    }
+
+    JsonArray arr = doc["results"].to<JsonArray>();
+    for (const auto& r : results) {
+        JsonObject obj = arr.add<JsonObject>();
+        obj["display_name"] = r.display_name;
+        obj["lat"] = r.lat;
+        obj["lon"] = r.lon;
+        obj["type"] = r.type;
+    }
+
     return serializeMsgPack(doc, buffer, maxLen);
 }
 

@@ -34,6 +34,7 @@ class Settings : public BaseApp {
 
         // Redraw trusted servers section (called after accept/revoke)
         void redrawTrustedServersSection();
+        void doRedrawTrustedServersSection();  // Actually performs the redraw (called async)
 
     protected:
         lv_obj_t * settings_column;

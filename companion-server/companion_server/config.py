@@ -22,8 +22,20 @@ class Config:
     # Search service settings
     search_max_results: int = 5
 
+    # AI Summary settings (optional, requires llama-cpp-python)
+    ai_summary_enabled: bool = False
+    ai_summary_model_path: Optional[str] = None  # Path to GGUF model file
+    ai_summary_max_tokens: int = 256
+    ai_summary_context_size: int = 2048
+
     # NTP service settings
     ntp_refresh_interval: int = 3600  # seconds
+
+    # Maps service settings
+    maps_enabled: bool = False
+    maps_mbtiles_path: Optional[str] = None  # Path to MBTiles file
+    maps_valhalla_url: Optional[str] = None  # URL to Valhalla routing server
+    maps_nominatim_url: Optional[str] = None  # URL to Nominatim geocoding server
 
     def __post_init__(self):
         """Ensure data directory exists and load config from disk if present."""
@@ -48,7 +60,15 @@ class Config:
         self.server_name = data.get("server_name", self.server_name)
         self.enabled_services = data.get("enabled_services", self.enabled_services)
         self.search_max_results = data.get("search_max_results", self.search_max_results)
+        self.ai_summary_enabled = data.get("ai_summary_enabled", self.ai_summary_enabled)
+        self.ai_summary_model_path = data.get("ai_summary_model_path", self.ai_summary_model_path)
+        self.ai_summary_max_tokens = data.get("ai_summary_max_tokens", self.ai_summary_max_tokens)
+        self.ai_summary_context_size = data.get("ai_summary_context_size", self.ai_summary_context_size)
         self.ntp_refresh_interval = data.get("ntp_refresh_interval", self.ntp_refresh_interval)
+        self.maps_enabled = data.get("maps_enabled", self.maps_enabled)
+        self.maps_mbtiles_path = data.get("maps_mbtiles_path", self.maps_mbtiles_path)
+        self.maps_valhalla_url = data.get("maps_valhalla_url", self.maps_valhalla_url)
+        self.maps_nominatim_url = data.get("maps_nominatim_url", self.maps_nominatim_url)
 
     def _save_to_file(self, path: Path):
         """Save configuration to JSON file."""
@@ -56,7 +76,15 @@ class Config:
             "server_name": self.server_name,
             "enabled_services": self.enabled_services,
             "search_max_results": self.search_max_results,
+            "ai_summary_enabled": self.ai_summary_enabled,
+            "ai_summary_model_path": self.ai_summary_model_path,
+            "ai_summary_max_tokens": self.ai_summary_max_tokens,
+            "ai_summary_context_size": self.ai_summary_context_size,
             "ntp_refresh_interval": self.ntp_refresh_interval,
+            "maps_enabled": self.maps_enabled,
+            "maps_mbtiles_path": self.maps_mbtiles_path,
+            "maps_valhalla_url": self.maps_valhalla_url,
+            "maps_nominatim_url": self.maps_nominatim_url,
         }
         with open(path, "w") as f:
             json.dump(data, f, indent=2)

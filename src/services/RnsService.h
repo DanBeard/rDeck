@@ -61,7 +61,17 @@ public:
     void sendServiceMessage(const RNS::Bytes& dest, const Retcon::Service::ServiceMessage& msg);
     void sendTrustAccept(const RNS::Bytes& serverHash);
     void requestNtpSync(const RNS::Bytes& serverHash);
-    void requestSearch(const RNS::Bytes& serverHash, const std::string& query);
+    void requestSearch(const RNS::Bytes& serverHash, const std::string& query, bool aiSummary = false);
+
+    // Maps service methods
+    void requestMapTile(const RNS::Bytes& serverHash, uint8_t z, uint32_t x, uint32_t y,
+                        Retcon::Service::TileFormat format = Retcon::Service::TileFormat::MONO_RLE);
+    void requestRoute(const RNS::Bytes& serverHash, int32_t startLat, int32_t startLon,
+                      int32_t endLat, int32_t endLon,
+                      Retcon::Service::TravelMode mode = Retcon::Service::TravelMode::WALK);
+    void requestGeocode(const RNS::Bytes& serverHash, const std::string& query,
+                        int32_t biasLat = 0, int32_t biasLon = 0, bool hasBias = false,
+                        uint8_t maxResults = 5);
 
     static constexpr const char* settingsSection = "reticulum";
     static bool drawSettings(lv_obj_t * column, Settings* settings);
@@ -128,6 +138,9 @@ protected:
     void handleTrustOffer(const Retcon::Service::TrustOfferPayload& payload, const RNS::Bytes& sourceHash);
     void handleNtpResponse(const Retcon::Service::NTPResponsePayload& payload);
     void handleSearchResponse(const Retcon::Service::SearchResponsePayload& payload, uint32_t requestId);
+    void handleMapTileResponse(const Retcon::Service::MapTileResponsePayload& payload, uint32_t requestId);
+    void handleRouteResponse(const Retcon::Service::MapRouteResponsePayload& payload, uint32_t requestId);
+    void handleGeocodeResponse(const Retcon::Service::MapGeocodeResponsePayload& payload, uint32_t requestId);
 
     // NTP sync state
     unsigned long _last_ntp_request = 0;
@@ -140,6 +153,28 @@ protected:
         uint32_t request_id;
     };
     std::map<uint32_t, PendingSearch> _pending_searches;
+
+    // Maps state - tile chunk assembly
+    struct PendingTile {
+        uint8_t z;
+        uint32_t x;
+        uint32_t y;
+        Retcon::Service::TileFormat format;
+        uint16_t total_chunks;
+        std::map<uint16_t, std::vector<uint8_t>> chunks;  // chunk_index -> data
+    };
+    std::map<uint32_t, PendingTile> _pending_tiles;  // request_id -> pending tile
+
+    struct PendingRoute {
+        uint32_t request_id;
+    };
+    std::map<uint32_t, PendingRoute> _pending_routes;
+
+    struct PendingGeocode {
+        std::string query;
+        uint32_t request_id;
+    };
+    std::map<uint32_t, PendingGeocode> _pending_geocodes;
 
     friend void transmit_delivery_cb(const RNS::PacketReceipt &receipt);
     friend void transmit_timeout_cb(const RNS::PacketReceipt &receipt);

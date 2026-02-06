@@ -23,6 +23,9 @@ enum EventType {
     MESSAGE_UPDATE, // message status changed, like when sending a message
     SETTINGS_CHANGED, // Settings changed (e.g., new trusted server offer)
     SEARCH_RESULTS, // Search results received from companion server
+    MAP_TILE_RECEIVED, // Map tile received from companion server
+    MAP_ROUTE_RECEIVED, // Route received from companion server
+    MAP_GEOCODE_RESULTS, // Geocode results received from companion server
 
     INTER_SERVICE_COMMS_START, // events that let services communicate with eachother
     SERVICE_REQUEST, // request some data arg[0] is request_ID, other args unused

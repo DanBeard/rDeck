@@ -5,6 +5,17 @@
 #include <cstring>
 
 void EmulatorLora::initLora() {
+    // Initialize config with default values to avoid crashes when displaying settings
+    // (startLora may not be called if using TCP mode instead of LoRa)
+    config.frequency = 915.0f;
+    config.bandwidth = 125.0f;
+    config.sf = 7;
+    config.cr = 5;
+    config.power = 17;
+    config.preamble_len = 18;
+    config.crc = 1;
+    config.explicitHeader = true;
+
     printf("[EmulatorLora] Initialized (stub mode)\n");
 }
 
