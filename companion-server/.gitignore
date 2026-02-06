@@ -27,6 +27,15 @@ build/
 # Data files
 *.json
 !pyproject.toml
+!docker/tileserver-config.json
+!docker/tileserver-style.json
 
 # Logs
 *.log
+
+# Docker runtime data and env overrides
+docker/data/
+docker/.env
+
+# Emulator data
+emu_data/

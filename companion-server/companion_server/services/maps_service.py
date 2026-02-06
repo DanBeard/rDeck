@@ -176,15 +176,16 @@ class MapsService(BaseService):
         self.config = config
         self._mbtiles_conn: Optional[sqlite3.Connection] = None
         self._http_client: Optional["httpx.Client"] = None
+        self._tileserver_url: Optional[str] = getattr(config, "maps_tileserver_url", None)
 
         # Initialize MBTiles connection if path configured
         mbtiles_path = getattr(config, "maps_mbtiles_path", None)
         if mbtiles_path and Path(mbtiles_path).exists():
             self._init_mbtiles(Path(mbtiles_path))
-        else:
-            logger.warning("Maps MBTiles path not configured or file not found")
+        elif not self._tileserver_url:
+            logger.warning("Maps: no MBTiles path or tileserver URL configured")
 
-        # Initialize HTTP client for routing/geocoding services
+        # Initialize HTTP client for routing/geocoding/tileserver services
         if HTTPX_AVAILABLE:
             self._http_client = httpx.Client(timeout=30.0)
 
@@ -211,7 +212,10 @@ class MapsService(BaseService):
     @property
     def available(self) -> bool:
         """Check if maps service is available."""
-        return self._mbtiles_conn is not None and PIL_AVAILABLE
+        has_tiles = self._mbtiles_conn is not None or (
+            self._tileserver_url is not None and HTTPX_AVAILABLE
+        )
+        return has_tiles and PIL_AVAILABLE
 
     def handle_request(
         self,
@@ -236,8 +240,56 @@ class MapsService(BaseService):
         else:
             raise ValueError(f"Unknown maps message type: {msg_type}")
 
+    def _fetch_tile_from_tileserver(self, z: int, x: int, y: int) -> Optional[bytes]:
+        """Fetch a rendered PNG tile from tileserver-gl.
+
+        Args:
+            z, x, y: Tile coordinates (XYZ scheme)
+
+        Returns:
+            PNG bytes or None on failure
+        """
+        if not self._tileserver_url or not self._http_client:
+            return None
+
+        try:
+            url = f"{self._tileserver_url}/styles/grayscale/{z}/{x}/{y}.png"
+            response = self._http_client.get(url, timeout=10.0)
+            response.raise_for_status()
+            return response.content
+        except Exception as e:
+            logger.debug(f"Tileserver fetch failed for {z}/{x}/{y}: {e}")
+            return None
+
+    def _fetch_tile_from_mbtiles(self, z: int, x: int, y: int) -> Optional[bytes]:
+        """Fetch a tile from the local MBTiles SQLite database.
+
+        Args:
+            z, x, y: Tile coordinates (XYZ scheme, converted to TMS internally)
+
+        Returns:
+            Raw tile bytes or None if not found
+        """
+        if not self._mbtiles_conn:
+            return None
+
+        try:
+            # MBTiles uses TMS y-coordinate (flipped from XYZ)
+            tms_y = (1 << z) - 1 - y
+            cursor = self._mbtiles_conn.execute(
+                "SELECT tile_data FROM tiles WHERE zoom_level = ? AND tile_column = ? AND tile_row = ?",
+                (z, x, tms_y)
+            )
+            row = cursor.fetchone()
+            return row[0] if row else None
+        except Exception as e:
+            logger.debug(f"MBTiles fetch failed for {z}/{x}/{y}: {e}")
+            return None
+
     def _handle_tile_request(self, payload: MapTileRequestPayload) -> list[MapTileResponsePayload]:
         """Handle tile request - returns list of response chunks.
+
+        Tries tileserver-gl first (rendered vector tiles), falls back to MBTiles.
 
         Args:
             payload: Tile request with z, x, y coordinates
@@ -246,16 +298,6 @@ class MapsService(BaseService):
             List of tile response chunks (may be multiple for large tiles)
         """
         z, x, y = payload.z, payload.x, payload.y
-
-        if not self._mbtiles_conn:
-            return [MapTileResponsePayload(
-                z=z, x=x, y=y,
-                format=payload.format,
-                chunk_index=0,
-                total_chunks=1,
-                data=b"",
-                error="Maps service not available",
-            )]
 
         if not PIL_AVAILABLE:
             return [MapTileResponsePayload(
@@ -268,16 +310,12 @@ class MapsService(BaseService):
             )]
 
         try:
-            # MBTiles uses TMS y-coordinate (flipped from XYZ)
-            tms_y = (1 << z) - 1 - y
+            # Try tileserver first, then MBTiles
+            tile_data = self._fetch_tile_from_tileserver(z, x, y)
+            if tile_data is None:
+                tile_data = self._fetch_tile_from_mbtiles(z, x, y)
 
-            cursor = self._mbtiles_conn.execute(
-                "SELECT tile_data FROM tiles WHERE zoom_level = ? AND tile_column = ? AND tile_row = ?",
-                (z, x, tms_y)
-            )
-            row = cursor.fetchone()
-
-            if not row:
+            if tile_data is None:
                 return [MapTileResponsePayload(
                     z=z, x=x, y=y,
                     format=payload.format,
@@ -286,8 +324,6 @@ class MapsService(BaseService):
                     data=b"",
                     error="Tile not found",
                 )]
-
-            tile_data = row[0]
 
             # Process tile: decode PNG, resize, dither, compress
             processed_data = self._process_tile(tile_data, payload.format)
@@ -587,6 +623,44 @@ class MapsService(BaseService):
                 query=payload.query,
                 error=str(e),
             )
+
+    def reload_mbtiles(self, path: str):
+        """Close existing MBTiles connection and open a new one.
+
+        Args:
+            path: Path to the new MBTiles file
+        """
+        if self._mbtiles_conn:
+            self._mbtiles_conn.close()
+            self._mbtiles_conn = None
+
+        p = Path(path)
+        if p.exists():
+            self._init_mbtiles(p)
+        else:
+            logger.warning(f"MBTiles file not found: {path}")
+
+    def reload_config(self, config: Config):
+        """Update service configuration without full restart.
+
+        Args:
+            config: Updated Config object
+        """
+        self.config = config
+
+        # Update tileserver URL
+        self._tileserver_url = getattr(config, "maps_tileserver_url", None)
+
+        # Reload MBTiles if path changed
+        mbtiles_path = getattr(config, "maps_mbtiles_path", None)
+        if mbtiles_path:
+            current_path = None
+            if self._mbtiles_conn:
+                # Can't easily get current path, just reload
+                pass
+            self.reload_mbtiles(mbtiles_path)
+
+        # HTTP client is reused - Valhalla/Nominatim URLs are read from config at request time
 
     def close(self):
         """Clean up resources."""

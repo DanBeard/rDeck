@@ -6,14 +6,16 @@ from datetime import datetime
 
 from textual.app import App, ComposeResult
 from textual.containers import Container, Horizontal, Vertical, ScrollableContainer
-from textual.widgets import Header, Footer, Static, Button, Label, ListView, ListItem
+from textual.widgets import Header, Footer, Static, Button, Label, ListView, ListItem, TabbedContent, TabPane
 from textual.binding import Binding
 from textual.message import Message
 
-from ..reticulum_service import ReticulumService, AnnounceInfo
+from ..reticulum_service import ReticulumService, AnnounceInfo, ServiceEvent
 from ..trust_manager import TrustManager, TrustStatus
+from ..config import Config
 from .announce_view import AnnounceView
 from .trust_view import TrustView
+from .service_views import NTPServiceView, SearchServiceView, MapsServiceView
 
 
 class TrustStateChanged(Message):
@@ -35,13 +37,19 @@ class AnnounceReceived(Message):
         self.announce = announce
 
 
+class ServiceEventReceived(Message):
+    """Message posted when a service event is received (from background thread)."""
+    def __init__(self, event: ServiceEvent):
+        super().__init__()
+        self.event = event
+
+
 class LogPanel(Static):
     """Log message display panel."""
 
     DEFAULT_CSS = """
     LogPanel {
         height: 100%;
-        border: solid green;
         padding: 0 1;
     }
     """
@@ -81,7 +89,7 @@ class CompanionServerApp(App):
         row-span: 1;
     }
 
-    #log-panel {
+    #tabs-panel {
         column-span: 2;
         row-span: 1;
     }
@@ -100,6 +108,19 @@ class CompanionServerApp(App):
     TrustView {
         height: 100%;
         border: solid yellow;
+    }
+
+    #service-tabs {
+        height: 100%;
+    }
+
+    #service-tabs > ContentSwitcher {
+        height: 1fr;
+    }
+
+    TabPane {
+        height: 100%;
+        padding: 0;
     }
     """
 
@@ -120,6 +141,7 @@ class CompanionServerApp(App):
         # Register callbacks
         self.rns_service.on_announce(self._on_announce)
         self.rns_service.on_log(self._on_log)
+        self.rns_service.on_service_event(self._on_service_event)
         self.trust_manager.on_change(self._on_trust_change)
 
     def compose(self) -> ComposeResult:
@@ -133,9 +155,20 @@ class CompanionServerApp(App):
             yield Label("Trusted Devices", classes="panel-title")
             yield TrustView(id="trusted")
 
-        with Container(id="log-panel"):
-            yield Label("Log", classes="panel-title")
-            yield LogPanel(id="log")
+        with Container(id="tabs-panel"):
+            with TabbedContent(id="service-tabs"):
+                with TabPane("Log", id="tab-log"):
+                    yield LogPanel(id="log")
+                with TabPane("NTP", id="tab-ntp"):
+                    yield NTPServiceView(id="ntp-view")
+                with TabPane("Search", id="tab-search"):
+                    yield SearchServiceView(self.rns_service.config, id="search-view")
+                with TabPane("Maps", id="tab-maps"):
+                    yield MapsServiceView(
+                        self.rns_service.config,
+                        maps_service=self.rns_service._maps_service,
+                        id="maps-view",
+                    )
 
         yield Footer()
 
@@ -150,7 +183,6 @@ class CompanionServerApp(App):
 
     def _on_announce(self, announce: AnnounceInfo):
         """Handle new announce from Reticulum service."""
-        # Post a message instead of using call_from_thread to avoid blocking
         self.post_message(AnnounceReceived(announce))
 
     def on_announce_received(self, message: AnnounceReceived):
@@ -168,7 +200,6 @@ class CompanionServerApp(App):
 
     def _on_log(self, message: str):
         """Handle log message from Reticulum service."""
-        # Post a message instead of using call_from_thread to avoid blocking
         self.post_message(LogMessage(message))
 
     def on_log_message(self, message: LogMessage):
@@ -180,10 +211,28 @@ class CompanionServerApp(App):
         log_panel = self.query_one("#log", LogPanel)
         log_panel.add_log(message)
 
+    def _on_service_event(self, event: ServiceEvent):
+        """Handle service event from background thread."""
+        self.post_message(ServiceEventReceived(event))
+
+    def on_service_event_received(self, message: ServiceEventReceived):
+        """Route service event to the appropriate tab (runs in main thread)."""
+        event = message.event
+        try:
+            if event.service == "ntp":
+                view = self.query_one("#ntp-view", NTPServiceView)
+                view.add_event(event)
+            elif event.service == "search":
+                view = self.query_one("#search-view", SearchServiceView)
+                view.add_event(event)
+            elif event.service == "maps":
+                view = self.query_one("#maps-view", MapsServiceView)
+                view.add_event(event)
+        except Exception as e:
+            self._add_log(f"Error routing service event: {e}")
+
     def _on_trust_change(self):
         """Handle trust state change."""
-        # Post a message instead of using call_from_thread to avoid blocking
-        # the background thread that triggered this callback
         self.post_message(TrustStateChanged())
 
     def on_trust_state_changed(self, message: TrustStateChanged):
@@ -226,6 +275,10 @@ class CompanionServerApp(App):
 
         thread = threading.Thread(target=send_offer, daemon=True)
         thread.start()
+
+    def on_maps_service_view_config_changed(self, message: MapsServiceView.ConfigChanged):
+        """Handle maps config changes from the maps tab."""
+        self._add_log(f"Maps config updated: {message.field} = {message.value}")
 
     def action_quit(self):
         """Quit the application."""

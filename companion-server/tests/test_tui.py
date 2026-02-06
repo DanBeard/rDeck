@@ -1,16 +1,18 @@
 """Tests for TUI components using Textual's test framework."""
 
 import pytest
-from unittest.mock import MagicMock, AsyncMock
+from unittest.mock import MagicMock, AsyncMock, Mock
 
 from textual.app import App, ComposeResult
-from textual.widgets import Static, Button, Label
+from textual.widgets import Static, Button, Label, Input
 
+from companion_server.config import Config
 from companion_server.trust_manager import TrustedDevice, TrustStatus, TrustManager
 from companion_server.reticulum_service import AnnounceInfo
 from companion_server.tui.app import CompanionServerApp, LogPanel
 from companion_server.tui.announce_view import AnnounceView, AnnounceItem
 from companion_server.tui.trust_view import TrustView, TrustItem
+from companion_server.tui.service_views import MapsServiceView
 
 
 # ============================================================
@@ -59,6 +61,22 @@ class TrustViewTestApp(App):
 
     def compose(self) -> ComposeResult:
         yield TrustView(id="trusted")
+
+
+class MapsServiceViewTestApp(App):
+    """Test wrapper for MapsServiceView."""
+
+    def __init__(self, config: Config, maps_service=None):
+        super().__init__()
+        self._config = config
+        self._maps_service = maps_service
+
+    def compose(self) -> ComposeResult:
+        yield MapsServiceView(
+            config=self._config,
+            maps_service=self._maps_service,
+            id="maps",
+        )
 
 
 # ============================================================
@@ -1003,3 +1021,160 @@ class TestTUIIntegration:
             mock_rns_service.send_trust_offer.assert_called_once_with(
                 announce.hash_hex
             )
+
+
+# ============================================================
+# MapsServiceView Tests
+# ============================================================
+
+
+class TestMapsServiceView:
+    """Tests for the MapsServiceView widget with tileserver support."""
+
+    @pytest.fixture
+    def config_with_tileserver(self):
+        """Config with tileserver URL set."""
+        config = Config.__new__(Config)
+        config.data_dir = None
+        config.server_name = "Test"
+        config.enabled_services = ["maps"]
+        config.search_max_results = 5
+        config.ai_summary_enabled = False
+        config.ai_summary_model_path = None
+        config.ai_summary_max_tokens = 256
+        config.ai_summary_context_size = 2048
+        config.ntp_refresh_interval = 3600
+        config.maps_enabled = True
+        config.maps_mbtiles_path = None
+        config.maps_valhalla_url = "http://localhost:8002"
+        config.maps_nominatim_url = "http://localhost:8080"
+        config.maps_tileserver_url = "http://localhost:8081"
+        return config
+
+    @pytest.fixture
+    def config_without_tileserver(self):
+        """Config without tileserver URL."""
+        config = Config.__new__(Config)
+        config.data_dir = None
+        config.server_name = "Test"
+        config.enabled_services = ["maps"]
+        config.search_max_results = 5
+        config.ai_summary_enabled = False
+        config.ai_summary_model_path = None
+        config.ai_summary_max_tokens = 256
+        config.ai_summary_context_size = 2048
+        config.ntp_refresh_interval = 3600
+        config.maps_enabled = True
+        config.maps_mbtiles_path = None
+        config.maps_valhalla_url = None
+        config.maps_nominatim_url = None
+        config.maps_tileserver_url = None
+        return config
+
+    @pytest.mark.asyncio
+    async def test_tileserver_status_shows_url(self, config_with_tileserver):
+        """MapsServiceView should display configured tileserver URL."""
+        async with MapsServiceViewTestApp(config_with_tileserver).run_test() as pilot:
+            status = pilot.app.query_one("#maps-tileserver-status", Static)
+            assert "http://localhost:8081" in str(status.render())
+
+    @pytest.mark.asyncio
+    async def test_tileserver_status_shows_not_configured(self, config_without_tileserver):
+        """MapsServiceView should show 'Not configured' when no tileserver URL."""
+        async with MapsServiceViewTestApp(config_without_tileserver).run_test() as pilot:
+            status = pilot.app.query_one("#maps-tileserver-status", Static)
+            assert "Not configured" in str(status.render())
+
+    @pytest.mark.asyncio
+    async def test_tileserver_status_has_ok_class(self, config_with_tileserver):
+        """Tileserver status should have 'ok' class when URL is set."""
+        async with MapsServiceViewTestApp(config_with_tileserver).run_test() as pilot:
+            status = pilot.app.query_one("#maps-tileserver-status", Static)
+            assert "ok" in status.classes
+
+    @pytest.mark.asyncio
+    async def test_tileserver_status_has_warn_class(self, config_without_tileserver):
+        """Tileserver status should have 'warn' class when URL is not set."""
+        async with MapsServiceViewTestApp(config_without_tileserver).run_test() as pilot:
+            status = pilot.app.query_one("#maps-tileserver-status", Static)
+            assert "warn" in status.classes
+
+    @pytest.mark.asyncio
+    async def test_has_set_tileserver_button(self, config_with_tileserver):
+        """MapsServiceView should have a 'Set Tileserver URL' button."""
+        async with MapsServiceViewTestApp(config_with_tileserver).run_test() as pilot:
+            buttons = list(pilot.app.query(Button))
+            labels = [str(b.label) for b in buttons]
+            assert any("Tileserver" in l for l in labels)
+
+    @pytest.mark.asyncio
+    async def test_tileserver_button_shows_input(self, config_with_tileserver):
+        """Clicking 'Set Tileserver URL' should show config input."""
+        async with MapsServiceViewTestApp(config_with_tileserver).run_test() as pilot:
+            # Config section should be hidden initially
+            config_section = pilot.app.query_one("#maps-config-input")
+            assert config_section.display is False
+
+            # Click Set Tileserver URL button
+            btn = pilot.app.query_one("#maps-set-tileserver", Button)
+            await pilot.click(btn)
+            await pilot.pause()
+
+            # Config section should now be visible
+            assert config_section.display is True
+
+            # Prompt should show "Tileserver URL:"
+            prompt = pilot.app.query_one("#maps-config-prompt", Static)
+            assert "Tileserver" in str(prompt.render())
+
+    @pytest.mark.asyncio
+    async def test_has_all_service_buttons(self, config_with_tileserver):
+        """MapsServiceView should have all service config buttons."""
+        async with MapsServiceViewTestApp(config_with_tileserver).run_test() as pilot:
+            buttons = list(pilot.app.query(Button))
+            labels = [str(b.label) for b in buttons]
+            assert any("Tileserver" in l for l in labels)
+            assert any("MBTiles" in l for l in labels)
+            assert any("Valhalla" in l for l in labels)
+            assert any("Nominatim" in l for l in labels)
+            assert any("Test" in l for l in labels)
+
+    @pytest.mark.asyncio
+    async def test_valhalla_status_displayed(self, config_with_tileserver):
+        """Valhalla URL should be shown in status."""
+        async with MapsServiceViewTestApp(config_with_tileserver).run_test() as pilot:
+            status = pilot.app.query_one("#maps-valhalla-status", Static)
+            assert "http://localhost:8002" in str(status.render())
+
+    @pytest.mark.asyncio
+    async def test_nominatim_status_displayed(self, config_with_tileserver):
+        """Nominatim URL should be shown in status."""
+        async with MapsServiceViewTestApp(config_with_tileserver).run_test() as pilot:
+            status = pilot.app.query_one("#maps-nominatim-status", Static)
+            assert "http://localhost:8080" in str(status.render())
+
+    @pytest.mark.asyncio
+    async def test_request_counter_starts_at_zero(self, config_with_tileserver):
+        """Request counter should start at 0."""
+        async with MapsServiceViewTestApp(config_with_tileserver).run_test() as pilot:
+            count = pilot.app.query_one("#maps-count", Static)
+            assert "0" in str(count.render())
+
+    @pytest.mark.asyncio
+    async def test_cancel_config_input(self, config_with_tileserver):
+        """Clicking Cancel should hide config input."""
+        async with MapsServiceViewTestApp(config_with_tileserver).run_test() as pilot:
+            # Show config input
+            btn = pilot.app.query_one("#maps-set-tileserver", Button)
+            await pilot.click(btn)
+            await pilot.pause()
+
+            config_section = pilot.app.query_one("#maps-config-input")
+            assert config_section.display is True
+
+            # Cancel
+            cancel_btn = pilot.app.query_one("#maps-config-cancel", Button)
+            await pilot.click(cancel_btn)
+            await pilot.pause()
+
+            assert config_section.display is False

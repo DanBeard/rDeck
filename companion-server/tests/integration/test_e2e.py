@@ -9,6 +9,7 @@ and the Python companion server. They require:
 Run with: pytest tests/integration/test_e2e.py -v --timeout=60
 """
 
+import io
 import time
 import pytest
 from pathlib import Path
@@ -737,6 +738,211 @@ class TestProtocolCompatibility:
 
             assert decoded.msg_type == msg_type, f"Failed for {msg_type}"
             assert decoded.service == service, f"Failed for {msg_type}"
+
+
+class TestTileserverIntegration:
+    """Tests for tileserver-gl integration with MapsService.
+
+    These tests verify that the maps service correctly handles
+    the tileserver HTTP tile fetching path, including config
+    propagation and the tileserver -> MBTiles fallback chain.
+    """
+
+    def test_maps_service_with_tileserver_config(self, temp_data_dir):
+        """MapsService should accept tileserver URL from Config."""
+        from companion_server.config import Config
+        from companion_server.services.maps_service import MapsService
+
+        config = Config(data_dir=temp_data_dir / "server")
+        config.maps_tileserver_url = "http://localhost:8081"
+        config.maps_mbtiles_path = None
+        config.save()
+
+        service = MapsService(config)
+        assert service._tileserver_url == "http://localhost:8081"
+        service.close()
+
+    def test_config_tileserver_url_roundtrip(self, temp_data_dir):
+        """Tileserver URL should survive config save/load cycle."""
+        from companion_server.config import Config
+
+        config = Config(data_dir=temp_data_dir / "server")
+        config.maps_tileserver_url = "http://tileserver.local:9090"
+        config.save()
+
+        config2 = Config(data_dir=temp_data_dir / "server")
+        assert config2.maps_tileserver_url == "http://tileserver.local:9090"
+
+    def test_maps_service_available_with_tileserver(self, temp_data_dir):
+        """MapsService should be available with tileserver URL (if PIL installed)."""
+        from companion_server.config import Config
+        from companion_server.services.maps_service import MapsService, PIL_AVAILABLE
+
+        config = Config(data_dir=temp_data_dir / "server")
+        config.maps_tileserver_url = "http://localhost:8081"
+        config.maps_mbtiles_path = None
+
+        service = MapsService(config)
+        if PIL_AVAILABLE:
+            assert service.available is True
+        else:
+            assert service.available is False
+        service.close()
+
+    def test_maps_service_unavailable_without_sources(self, temp_data_dir):
+        """MapsService should be unavailable without tileserver or MBTiles."""
+        from companion_server.config import Config
+        from companion_server.services.maps_service import MapsService
+
+        config = Config(data_dir=temp_data_dir / "server")
+        config.maps_tileserver_url = None
+        config.maps_mbtiles_path = None
+
+        service = MapsService(config)
+        assert service.available is False
+        service.close()
+
+    def test_tile_request_through_maps_service(self, temp_data_dir):
+        """Full tile request flow through MapsService with mocked tileserver."""
+        import struct
+        import zlib
+        from unittest.mock import patch, Mock
+        from companion_server.config import Config
+        from companion_server.services.maps_service import MapsService, PIL_AVAILABLE
+        from companion_server.protocol.messages import (
+            MessageType,
+            MapTileRequestPayload,
+            TileFormat,
+        )
+
+        if not PIL_AVAILABLE:
+            pytest.skip("PIL not available")
+
+        config = Config(data_dir=temp_data_dir / "server")
+        config.maps_tileserver_url = "http://localhost:8081"
+        config.maps_mbtiles_path = None
+
+        service = MapsService(config)
+
+        # Create a valid 256x256 PNG for tileserver to "return"
+        from PIL import Image
+        img = Image.new("RGB", (256, 256), color=(200, 200, 200))
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        fake_tile_png = buf.getvalue()
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.content = fake_tile_png
+        mock_response.raise_for_status = Mock()
+
+        with patch.object(service._http_client, 'get', return_value=mock_response):
+            responses = service.handle_request(
+                MapTileRequestPayload(z=10, x=512, y=512, format=TileFormat.MONO_RLE),
+                MessageType.MAP_TILE_REQUEST,
+            )
+
+        # Should get back processed tile data (dithered, chunked)
+        assert len(responses) >= 1
+        assert responses[0].error is None
+        assert len(responses[0].data) > 0
+        # Reassemble all chunks
+        full_data = b"".join(r.data for r in responses)
+        assert len(full_data) > 0
+
+        service.close()
+
+    def test_tile_request_fallback_to_mbtiles(self, temp_data_dir):
+        """When tileserver fails, should fall back to MBTiles."""
+        import sqlite3
+        import struct
+        import zlib
+        from unittest.mock import patch
+        from companion_server.config import Config
+        from companion_server.services.maps_service import MapsService, PIL_AVAILABLE
+        from companion_server.protocol.messages import (
+            MessageType,
+            MapTileRequestPayload,
+            TileFormat,
+        )
+
+        if not PIL_AVAILABLE:
+            pytest.skip("PIL not available")
+
+        # Create MBTiles with a test tile
+        mbtiles_path = temp_data_dir / "tiles.mbtiles"
+        _create_test_mbtiles(mbtiles_path)
+
+        config = Config(data_dir=temp_data_dir / "server")
+        config.maps_tileserver_url = "http://localhost:8081"
+        config.maps_mbtiles_path = str(mbtiles_path)
+
+        service = MapsService(config)
+
+        # Tileserver returns None (connection refused)
+        with patch.object(service, '_fetch_tile_from_tileserver', return_value=None):
+            responses = service.handle_request(
+                MapTileRequestPayload(z=10, x=512, y=512, format=TileFormat.MONO_RLE),
+                MessageType.MAP_TILE_REQUEST,
+            )
+
+        assert len(responses) >= 1
+        assert responses[0].error is None
+        assert len(responses[0].data) > 0
+
+        service.close()
+
+    def test_reload_config_updates_tileserver(self, temp_data_dir):
+        """reload_config should pick up new tileserver URL."""
+        from companion_server.config import Config
+        from companion_server.services.maps_service import MapsService
+
+        config = Config(data_dir=temp_data_dir / "server")
+        config.maps_tileserver_url = None
+        config.maps_mbtiles_path = None
+
+        service = MapsService(config)
+        assert service._tileserver_url is None
+
+        config.maps_tileserver_url = "http://localhost:8081"
+        service.reload_config(config)
+        assert service._tileserver_url == "http://localhost:8081"
+
+        service.close()
+
+
+def _create_test_mbtiles(path):
+    """Create a minimal MBTiles file with a test tile at z=10, x=512, y=512."""
+    import sqlite3
+    import struct
+    import zlib
+
+    def _chunk(chunk_type: bytes, data: bytes) -> bytes:
+        c = chunk_type + data
+        crc = struct.pack(">I", zlib.crc32(c) & 0xFFFFFFFF)
+        return struct.pack(">I", len(data)) + c + crc
+
+    # Create a minimal 1x1 PNG
+    sig = b"\x89PNG\r\n\x1a\n"
+    ihdr_data = struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0)
+    ihdr = _chunk(b"IHDR", ihdr_data)
+    raw = b"\x00\xFF\xFF\xFF"
+    idat = _chunk(b"IDAT", zlib.compress(raw))
+    iend = _chunk(b"IEND", b"")
+    png_data = sig + ihdr + idat + iend
+
+    conn = sqlite3.connect(str(path))
+    conn.execute("CREATE TABLE metadata (name TEXT, value TEXT)")
+    conn.execute("""CREATE TABLE tiles (
+        zoom_level INTEGER, tile_column INTEGER,
+        tile_row INTEGER, tile_data BLOB
+    )""")
+    conn.execute("INSERT INTO metadata VALUES ('name', 'test')")
+    conn.execute("INSERT INTO metadata VALUES ('format', 'png')")
+    # z=10, x=512, TMS y=511 (XYZ y=512)
+    conn.execute("INSERT INTO tiles VALUES (10, 512, 511, ?)", (png_data,))
+    conn.commit()
+    conn.close()
 
 
 class TestEmulatorWithMaxFrames:

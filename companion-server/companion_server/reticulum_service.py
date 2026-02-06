@@ -1,11 +1,12 @@
 """Core Reticulum/LXMF integration for companion server."""
 
+import os
 import time
 import threading
 import logging
 from pathlib import Path
 from typing import Callable, Optional, Any
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import RNS
 import LXMF
@@ -62,6 +63,17 @@ class AnnounceInfo:
         return self.device_type is not None
 
 
+@dataclass
+class ServiceEvent:
+    """Structured event emitted when a service handles a request."""
+
+    service: str  # "ntp", "search", "maps"
+    event_type: str  # "request", "response", "error"
+    device_name: str
+    details: str  # Human-readable summary
+    timestamp: float = field(default_factory=time.time)
+
+
 class AnnounceHandler:
     """Handler for RNS announces.
 
@@ -95,6 +107,7 @@ class ReticulumService:
         self._announce_callbacks: list[Callable[[AnnounceInfo], None]] = []
         self._message_callbacks: list[Callable[[ServiceMessage, bytes], None]] = []
         self._log_callbacks: list[Callable[[str], None]] = []
+        self._service_event_callbacks: list[Callable[[ServiceEvent], None]] = []
 
         # Services
         self._ntp_service = NTPService()
@@ -156,8 +169,9 @@ class ReticulumService:
         in the companion server's data directory.
         """
         # Initialize Reticulum using system config (None = default ~/.reticulum/)
-        # This allows sharing interfaces with other RNS applications
-        self._reticulum = RNS.Reticulum(configdir=None)
+        # RNS_CONFIG_DIR env var overrides for Docker deployments
+        config_dir = os.environ.get("RNS_CONFIG_DIR", None)
+        self._reticulum = RNS.Reticulum(configdir=config_dir)
 
         # Load or create identity
         identity_path = self.config.identity_path
@@ -354,6 +368,7 @@ class ReticulumService:
             from datetime import datetime
             time_str = datetime.fromtimestamp(response.server_timestamp).strftime("%Y-%m-%d %H:%M:%S")
             self._log(f"[NTP] Sent time to '{device_name}': {time_str}")
+            self._fire_service_event("ntp", "response", device_name, f"Sent time: {time_str}")
 
         elif msg.msg_type == MessageType.SEARCH_REQUEST:
             # Search request
@@ -384,8 +399,10 @@ class ReticulumService:
             )
             if response.error:
                 self._log(f"[Search] Error for '{device_name}': {response.error}")
+                self._fire_service_event("search", "error", device_name, f"Query: '{payload.query}' - {response.error}")
             else:
                 self._log(f"[Search] Sent {len(response.results)} results to '{device_name}'")
+                self._fire_service_event("search", "response", device_name, f"'{payload.query}' -> {len(response.results)} results")
 
         elif msg.msg_type in (MessageType.MAP_TILE_REQUEST, MessageType.MAP_ROUTE_REQUEST, MessageType.MAP_GEOCODE_REQUEST):
             # Maps service requests
@@ -422,8 +439,10 @@ class ReticulumService:
                     )
                 if responses and responses[0].error:
                     self._log(f"[Maps] Tile error for '{device_name}': {responses[0].error}")
+                    self._fire_service_event("maps", "error", device_name, f"Tile z={payload.z} x={payload.x} y={payload.y} - {responses[0].error}")
                 else:
                     self._log(f"[Maps] Sent tile ({len(responses)} chunks) to '{device_name}'")
+                    self._fire_service_event("maps", "response", device_name, f"Tile z={payload.z} x={payload.x} y={payload.y} ({len(responses)} chunks)")
 
             elif msg.msg_type == MessageType.MAP_ROUTE_REQUEST:
                 payload: MapRouteRequestPayload = msg.payload
@@ -440,8 +459,10 @@ class ReticulumService:
                 )
                 if response.error:
                     self._log(f"[Maps] Route error for '{device_name}': {response.error}")
+                    self._fire_service_event("maps", "error", device_name, f"Route - {response.error}")
                 else:
                     self._log(f"[Maps] Sent route ({len(response.points)//2} points) to '{device_name}'")
+                    self._fire_service_event("maps", "response", device_name, f"Route: {len(response.points)//2} points")
 
             elif msg.msg_type == MessageType.MAP_GEOCODE_REQUEST:
                 payload: MapGeocodeRequestPayload = msg.payload
@@ -458,8 +479,10 @@ class ReticulumService:
                 )
                 if response.error:
                     self._log(f"[Maps] Geocode error for '{device_name}': {response.error}")
+                    self._fire_service_event("maps", "error", device_name, f"Geocode '{payload.query}' - {response.error}")
                 else:
                     self._log(f"[Maps] Sent {len(response.results)} geocode results to '{device_name}'")
+                    self._fire_service_event("maps", "response", device_name, f"Geocode '{payload.query}' -> {len(response.results)} results")
 
     def send_trust_offer(self, destination_hash: str):
         """Send a trust offer to a device."""
@@ -589,6 +612,20 @@ class ReticulumService:
             self._log(f"Error sending service message: {e}")
             logger.exception(f"Error sending service message: {e}")
 
+    def _fire_service_event(self, service: str, event_type: str, device_name: str, details: str):
+        """Fire a structured service event to registered callbacks."""
+        event = ServiceEvent(
+            service=service,
+            event_type=event_type,
+            device_name=device_name,
+            details=details,
+        )
+        for callback in self._service_event_callbacks:
+            try:
+                callback(event)
+            except Exception as e:
+                logger.exception(f"Service event callback error: {e}")
+
     def _log(self, message: str):
         """Log a message and notify callbacks."""
         logger.info(message)
@@ -611,6 +648,10 @@ class ReticulumService:
     def on_log(self, callback: Callable[[str], None]):
         """Register a callback for log messages."""
         self._log_callbacks.append(callback)
+
+    def on_service_event(self, callback: Callable[[ServiceEvent], None]):
+        """Register a callback for structured service events."""
+        self._service_event_callbacks.append(callback)
 
     # Properties
 

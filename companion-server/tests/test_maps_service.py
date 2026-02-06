@@ -1,8 +1,11 @@
 """Tests for Maps service and protocol."""
 
 import io
+import sqlite3
+import struct
+import zlib
 import pytest
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock, patch, MagicMock, PropertyMock
 from pathlib import Path
 
 from companion_server.services.maps_service import (
@@ -379,3 +382,392 @@ class TestCrossCompatibility:
         assert "lat" in result
         assert "lon" in result
         assert "type" in result
+
+
+# ============================================================
+# Helper Functions
+# ============================================================
+
+
+def _make_minimal_png() -> bytes:
+    """Create a minimal valid 1x1 white PNG."""
+    def _chunk(chunk_type: bytes, data: bytes) -> bytes:
+        c = chunk_type + data
+        crc = struct.pack(">I", zlib.crc32(c) & 0xFFFFFFFF)
+        return struct.pack(">I", len(data)) + c + crc
+
+    sig = b"\x89PNG\r\n\x1a\n"
+    ihdr_data = struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0)  # 1x1, 8-bit RGB
+    ihdr = _chunk(b"IHDR", ihdr_data)
+    raw = b"\x00\xFF\xFF\xFF"
+    idat = _chunk(b"IDAT", zlib.compress(raw))
+    iend = _chunk(b"IEND", b"")
+    return sig + ihdr + idat + iend
+
+
+def _make_test_mbtiles(path: Path) -> Path:
+    """Create a minimal valid MBTiles file with one test tile."""
+    conn = sqlite3.connect(str(path))
+    conn.execute("CREATE TABLE metadata (name TEXT, value TEXT)")
+    conn.execute("""CREATE TABLE tiles (
+        zoom_level INTEGER, tile_column INTEGER,
+        tile_row INTEGER, tile_data BLOB
+    )""")
+    conn.execute("INSERT INTO metadata VALUES ('name', 'test')")
+    conn.execute("INSERT INTO metadata VALUES ('format', 'png')")
+    png_data = _make_minimal_png()
+    # z=10, x=512, y=512 -> TMS y = (1<<10) - 1 - 512 = 511
+    conn.execute("INSERT INTO tiles VALUES (10, 512, 511, ?)", (png_data,))
+    conn.commit()
+    conn.close()
+    return path
+
+
+# ============================================================
+# Tileserver Integration Tests
+# ============================================================
+
+
+class TestTileserverConfig:
+    """Test MapsService initialization with tileserver URL."""
+
+    def test_init_with_tileserver_url(self):
+        """Service should store tileserver URL from config."""
+        config = Mock(spec=Config)
+        config.maps_mbtiles_path = None
+        config.maps_valhalla_url = None
+        config.maps_nominatim_url = None
+        config.maps_tileserver_url = "http://localhost:8081"
+        svc = MapsService(config)
+        assert svc._tileserver_url == "http://localhost:8081"
+
+    def test_init_without_tileserver_url(self):
+        """Service should handle missing tileserver URL gracefully."""
+        config = Mock(spec=Config)
+        config.maps_mbtiles_path = None
+        config.maps_valhalla_url = None
+        config.maps_nominatim_url = None
+        config.maps_tileserver_url = None
+        svc = MapsService(config)
+        assert svc._tileserver_url is None
+
+    def test_available_with_tileserver_only(self):
+        """Service should be available with tileserver URL even without MBTiles."""
+        config = Mock(spec=Config)
+        config.maps_mbtiles_path = None
+        config.maps_valhalla_url = None
+        config.maps_nominatim_url = None
+        config.maps_tileserver_url = "http://localhost:8081"
+        svc = MapsService(config)
+        # Available requires PIL + (mbtiles OR tileserver)
+        try:
+            from PIL import Image
+            assert svc.available is True
+        except ImportError:
+            assert svc.available is False  # PIL missing blocks availability
+
+    def test_available_with_neither_source(self):
+        """Service should be unavailable with no tile sources."""
+        config = Mock(spec=Config)
+        config.maps_mbtiles_path = None
+        config.maps_valhalla_url = None
+        config.maps_nominatim_url = None
+        config.maps_tileserver_url = None
+        svc = MapsService(config)
+        assert svc.available is False
+
+    def test_reload_config_updates_tileserver_url(self):
+        """reload_config should update tileserver URL."""
+        config = Mock(spec=Config)
+        config.maps_mbtiles_path = None
+        config.maps_valhalla_url = None
+        config.maps_nominatim_url = None
+        config.maps_tileserver_url = None
+        svc = MapsService(config)
+        assert svc._tileserver_url is None
+
+        new_config = Mock(spec=Config)
+        new_config.maps_mbtiles_path = None
+        new_config.maps_valhalla_url = None
+        new_config.maps_nominatim_url = None
+        new_config.maps_tileserver_url = "http://localhost:9090"
+        svc.reload_config(new_config)
+        assert svc._tileserver_url == "http://localhost:9090"
+
+    def test_reload_config_clears_tileserver_url(self):
+        """reload_config should allow clearing tileserver URL."""
+        config = Mock(spec=Config)
+        config.maps_mbtiles_path = None
+        config.maps_valhalla_url = None
+        config.maps_nominatim_url = None
+        config.maps_tileserver_url = "http://localhost:8081"
+        svc = MapsService(config)
+        assert svc._tileserver_url == "http://localhost:8081"
+
+        new_config = Mock(spec=Config)
+        new_config.maps_mbtiles_path = None
+        new_config.maps_valhalla_url = None
+        new_config.maps_nominatim_url = None
+        new_config.maps_tileserver_url = None
+        svc.reload_config(new_config)
+        assert svc._tileserver_url is None
+
+
+class TestTileserverFetching:
+    """Test HTTP tile fetching from tileserver-gl."""
+
+    @pytest.fixture
+    def service_with_tileserver(self):
+        config = Mock(spec=Config)
+        config.maps_mbtiles_path = None
+        config.maps_valhalla_url = None
+        config.maps_nominatim_url = None
+        config.maps_tileserver_url = "http://localhost:8081"
+        return MapsService(config)
+
+    @pytest.fixture
+    def service_no_tileserver(self):
+        config = Mock(spec=Config)
+        config.maps_mbtiles_path = None
+        config.maps_valhalla_url = None
+        config.maps_nominatim_url = None
+        config.maps_tileserver_url = None
+        return MapsService(config)
+
+    def test_fetch_tile_success(self, service_with_tileserver):
+        """Tileserver fetch should return PNG bytes on success."""
+        fake_png = _make_minimal_png()
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.content = fake_png
+        mock_response.raise_for_status = Mock()
+
+        with patch.object(service_with_tileserver._http_client, 'get', return_value=mock_response) as mock_get:
+            result = service_with_tileserver._fetch_tile_from_tileserver(10, 512, 512)
+
+        assert result == fake_png
+        mock_get.assert_called_once_with(
+            "http://localhost:8081/styles/grayscale/10/512/512.png",
+            timeout=10.0,
+        )
+
+    def test_fetch_tile_http_error(self, service_with_tileserver):
+        """HTTP error should return None, not raise."""
+        import httpx
+        with patch.object(
+            service_with_tileserver._http_client, 'get',
+            side_effect=httpx.ConnectError("Connection refused")
+        ):
+            result = service_with_tileserver._fetch_tile_from_tileserver(10, 512, 512)
+        assert result is None
+
+    def test_fetch_tile_404(self, service_with_tileserver):
+        """404 response should return None (raise_for_status raises)."""
+        import httpx
+        mock_response = Mock()
+        mock_response.raise_for_status = Mock(
+            side_effect=httpx.HTTPStatusError("404", request=Mock(), response=Mock())
+        )
+        with patch.object(service_with_tileserver._http_client, 'get', return_value=mock_response):
+            result = service_with_tileserver._fetch_tile_from_tileserver(10, 512, 512)
+        assert result is None
+
+    def test_fetch_tile_no_tileserver_url(self, service_no_tileserver):
+        """Without tileserver URL, fetch should return None immediately."""
+        result = service_no_tileserver._fetch_tile_from_tileserver(10, 512, 512)
+        assert result is None
+
+    def test_fetch_tile_no_http_client(self):
+        """Without httpx, fetch should return None."""
+        config = Mock(spec=Config)
+        config.maps_mbtiles_path = None
+        config.maps_valhalla_url = None
+        config.maps_nominatim_url = None
+        config.maps_tileserver_url = "http://localhost:8081"
+        svc = MapsService(config)
+        svc._http_client = None  # Simulate httpx not available
+        result = svc._fetch_tile_from_tileserver(10, 512, 512)
+        assert result is None
+
+    def test_fetch_tile_timeout(self, service_with_tileserver):
+        """Timeout should return None, not raise."""
+        import httpx
+        with patch.object(
+            service_with_tileserver._http_client, 'get',
+            side_effect=httpx.ReadTimeout("timeout")
+        ):
+            result = service_with_tileserver._fetch_tile_from_tileserver(10, 512, 512)
+        assert result is None
+
+
+class TestMBTilesFetching:
+    """Test the extracted _fetch_tile_from_mbtiles method."""
+
+    @pytest.fixture
+    def mbtiles_path(self, tmp_path):
+        return _make_test_mbtiles(tmp_path / "test.mbtiles")
+
+    def test_fetch_existing_tile(self, mbtiles_path):
+        """Should return tile data for existing coordinates."""
+        config = Mock(spec=Config)
+        config.maps_mbtiles_path = str(mbtiles_path)
+        config.maps_valhalla_url = None
+        config.maps_nominatim_url = None
+        config.maps_tileserver_url = None
+        svc = MapsService(config)
+
+        result = svc._fetch_tile_from_mbtiles(10, 512, 512)
+        assert result is not None
+        assert len(result) > 0
+        # Should be valid PNG data
+        assert result[:4] == b"\x89PNG"
+
+    def test_fetch_missing_tile(self, mbtiles_path):
+        """Should return None for non-existent tile."""
+        config = Mock(spec=Config)
+        config.maps_mbtiles_path = str(mbtiles_path)
+        config.maps_valhalla_url = None
+        config.maps_nominatim_url = None
+        config.maps_tileserver_url = None
+        svc = MapsService(config)
+
+        result = svc._fetch_tile_from_mbtiles(5, 999, 999)
+        assert result is None
+
+    def test_fetch_no_connection(self):
+        """Should return None when no MBTiles connection."""
+        config = Mock(spec=Config)
+        config.maps_mbtiles_path = None
+        config.maps_valhalla_url = None
+        config.maps_nominatim_url = None
+        config.maps_tileserver_url = None
+        svc = MapsService(config)
+
+        result = svc._fetch_tile_from_mbtiles(10, 512, 512)
+        assert result is None
+
+
+class TestTileFallbackLogic:
+    """Test tile request fallback: tileserver -> MBTiles -> error."""
+
+    @pytest.fixture
+    def mbtiles_path(self, tmp_path):
+        return _make_test_mbtiles(tmp_path / "test.mbtiles")
+
+    def test_tileserver_first_then_mbtiles_fallback(self, mbtiles_path):
+        """When tileserver fails, should fall back to MBTiles."""
+        config = Mock(spec=Config)
+        config.maps_mbtiles_path = str(mbtiles_path)
+        config.maps_valhalla_url = None
+        config.maps_nominatim_url = None
+        config.maps_tileserver_url = "http://localhost:8081"
+        svc = MapsService(config)
+
+        # Tileserver returns None (failure), MBTiles has the tile
+        with patch('companion_server.services.maps_service.PIL_AVAILABLE', True):
+            with patch.object(svc, '_fetch_tile_from_tileserver', return_value=None):
+                with patch.object(svc, '_fetch_tile_from_mbtiles', return_value=b"tile_data") as mock_mbtiles:
+                    with patch.object(svc, '_process_tile', return_value=b"processed") as mock_process:
+                        responses = svc._handle_tile_request(
+                            MapTileRequestPayload(z=10, x=512, y=512, format=TileFormat.MONO_RLE)
+                        )
+
+        mock_mbtiles.assert_called_once_with(10, 512, 512)
+        mock_process.assert_called_once_with(b"tile_data", TileFormat.MONO_RLE)
+        assert responses[0].error is None
+
+    def test_tileserver_success_skips_mbtiles(self):
+        """When tileserver succeeds, should not query MBTiles."""
+        config = Mock(spec=Config)
+        config.maps_mbtiles_path = None
+        config.maps_valhalla_url = None
+        config.maps_nominatim_url = None
+        config.maps_tileserver_url = "http://localhost:8081"
+        svc = MapsService(config)
+
+        fake_png = _make_minimal_png()
+        with patch('companion_server.services.maps_service.PIL_AVAILABLE', True):
+            with patch.object(svc, '_fetch_tile_from_tileserver', return_value=fake_png):
+                with patch.object(svc, '_fetch_tile_from_mbtiles') as mock_mbtiles:
+                    with patch.object(svc, '_process_tile', return_value=b"processed"):
+                        responses = svc._handle_tile_request(
+                            MapTileRequestPayload(z=10, x=512, y=512, format=TileFormat.MONO_RLE)
+                        )
+
+        mock_mbtiles.assert_not_called()
+        assert responses[0].error is None
+
+    def test_both_sources_fail_returns_error(self):
+        """When both tileserver and MBTiles fail, should return error."""
+        config = Mock(spec=Config)
+        config.maps_mbtiles_path = None
+        config.maps_valhalla_url = None
+        config.maps_nominatim_url = None
+        config.maps_tileserver_url = "http://localhost:8081"
+        svc = MapsService(config)
+
+        with patch('companion_server.services.maps_service.PIL_AVAILABLE', True):
+            with patch.object(svc, '_fetch_tile_from_tileserver', return_value=None):
+                with patch.object(svc, '_fetch_tile_from_mbtiles', return_value=None):
+                    responses = svc._handle_tile_request(
+                        MapTileRequestPayload(z=10, x=999, y=999, format=TileFormat.MONO_RLE)
+                    )
+
+        assert len(responses) == 1
+        assert responses[0].error == "Tile not found"
+
+    def test_no_pil_returns_error(self):
+        """Without PIL, should return error before any fetch."""
+        config = Mock(spec=Config)
+        config.maps_mbtiles_path = None
+        config.maps_valhalla_url = None
+        config.maps_nominatim_url = None
+        config.maps_tileserver_url = "http://localhost:8081"
+        svc = MapsService(config)
+
+        with patch('companion_server.services.maps_service.PIL_AVAILABLE', False):
+            responses = svc._handle_tile_request(
+                MapTileRequestPayload(z=10, x=512, y=512, format=TileFormat.MONO_RLE)
+            )
+
+        assert len(responses) == 1
+        assert "PIL" in responses[0].error
+
+    def test_tileserver_only_no_mbtiles(self):
+        """Service with only tileserver (no MBTiles) should work."""
+        config = Mock(spec=Config)
+        config.maps_mbtiles_path = None
+        config.maps_valhalla_url = None
+        config.maps_nominatim_url = None
+        config.maps_tileserver_url = "http://localhost:8081"
+        svc = MapsService(config)
+
+        fake_png = _make_minimal_png()
+        with patch('companion_server.services.maps_service.PIL_AVAILABLE', True):
+            with patch.object(svc, '_fetch_tile_from_tileserver', return_value=fake_png):
+                with patch.object(svc, '_process_tile', return_value=b"processed"):
+                    responses = svc._handle_tile_request(
+                        MapTileRequestPayload(z=10, x=512, y=512, format=TileFormat.MONO_RLE)
+                    )
+
+        assert responses[0].error is None
+        assert responses[0].data == b"processed"
+
+    def test_process_tile_exception_returns_error(self):
+        """Exception during tile processing should return error, not crash."""
+        config = Mock(spec=Config)
+        config.maps_mbtiles_path = None
+        config.maps_valhalla_url = None
+        config.maps_nominatim_url = None
+        config.maps_tileserver_url = "http://localhost:8081"
+        svc = MapsService(config)
+
+        with patch('companion_server.services.maps_service.PIL_AVAILABLE', True):
+            with patch.object(svc, '_fetch_tile_from_tileserver', return_value=b"bad data"):
+                with patch.object(svc, '_process_tile', side_effect=Exception("decode error")):
+                    responses = svc._handle_tile_request(
+                        MapTileRequestPayload(z=10, x=512, y=512, format=TileFormat.MONO_RLE)
+                    )
+
+        assert len(responses) == 1
+        assert "decode error" in responses[0].error

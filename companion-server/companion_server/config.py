@@ -36,6 +36,7 @@ class Config:
     maps_mbtiles_path: Optional[str] = None  # Path to MBTiles file
     maps_valhalla_url: Optional[str] = None  # URL to Valhalla routing server
     maps_nominatim_url: Optional[str] = None  # URL to Nominatim geocoding server
+    maps_tileserver_url: Optional[str] = None  # URL to tileserver-gl for vector tile rendering
 
     def __post_init__(self):
         """Ensure data directory exists and load config from disk if present."""
@@ -69,6 +70,7 @@ class Config:
         self.maps_mbtiles_path = data.get("maps_mbtiles_path", self.maps_mbtiles_path)
         self.maps_valhalla_url = data.get("maps_valhalla_url", self.maps_valhalla_url)
         self.maps_nominatim_url = data.get("maps_nominatim_url", self.maps_nominatim_url)
+        self.maps_tileserver_url = data.get("maps_tileserver_url", self.maps_tileserver_url)
 
     def _save_to_file(self, path: Path):
         """Save configuration to JSON file."""
@@ -85,9 +87,15 @@ class Config:
             "maps_mbtiles_path": self.maps_mbtiles_path,
             "maps_valhalla_url": self.maps_valhalla_url,
             "maps_nominatim_url": self.maps_nominatim_url,
+            "maps_tileserver_url": self.maps_tileserver_url,
         }
         with open(path, "w") as f:
             json.dump(data, f, indent=2)
+
+    def save(self):
+        """Save current configuration to disk."""
+        config_file = self.data_dir / "config.json"
+        self._save_to_file(config_file)
 
     @property
     def identity_path(self) -> Path:
