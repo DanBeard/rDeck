@@ -19,6 +19,10 @@ const char WelcomeMsg[] = "RetOS";
 uint8_t *decodebuffer = NULL;
 lv_timer_t *flush_timer = NULL;
 
+// Periodic full refresh counter to prevent ghosting
+static uint8_t partial_update_count = 0;
+static const uint8_t FULL_REFRESH_INTERVAL = 25;
+
 
 union flush_buf_pixel
 {
@@ -53,6 +57,15 @@ union flush_buf_pixel
 
 /* virtual */ void TDeckProScreen::drawStartupScreen() {
     Serial.println("Drawing startup screen.....");
+
+    // Run 2 full refresh cycles to clear ghosting from previous session
+    // This properly resets the electrophoretic particles
+    Serial.println("Clearing e-ink ghosting...");
+    display.clearScreen(0x00);  // Full black + full refresh
+    delay(100);
+    display.clearScreen(0xFF);  // Full white + full refresh
+    delay(100);
+
     display.setRotation(0);
     display.setFont(&FreeMonoBold9pt7b);
     if (display.epd2.WIDTH < 104) display.setFont(0);
@@ -81,14 +94,28 @@ static void flush_timer_cb(lv_timer_t *t)
         lv_coord_t w = LV_HOR_RES;
         lv_coord_t h = LV_VER_RES;
 
-        display.setPartialWindow(0, 0, w, h);
-        // display.setFullWindow();
+        // Check if it's time for a full refresh to prevent ghosting
+        bool do_full_refresh = (++partial_update_count >= FULL_REFRESH_INTERVAL);
+
+        if (do_full_refresh) {
+            // Use full window mode for proper particle reset
+            display.setFullWindow();
+            partial_update_count = 0;
+        } else {
+            display.setPartialWindow(0, 0, w, h);
+        }
+
         display.firstPage();
         do {
             display.drawInvertedBitmap(0, 0, decodebuffer, w, h - 3, GxEPD_BLACK);
         }
         while (display.nextPage());
-        //Serial.printf("flush_timer_cb\n");
+
+        if (do_full_refresh) {
+            // Full refresh mode uses different waveform timing
+            display.refresh(false);
+        }
+
         display.hibernate();
         display.powerOff();
         lv_timer_pause(flush_timer);
@@ -178,6 +205,8 @@ static void tdeck_pro_touchpad_read(lv_indev_drv_t * indev_drv, lv_indev_data_t 
     lv_indev_drv_init(&indev_drv);
     indev_drv.type = LV_INDEV_TYPE_POINTER;
     indev_drv.read_cb = tdeck_pro_touchpad_read;
+    indev_drv.scroll_limit = 5;    // engage scroll sooner (default 10)
+    indev_drv.scroll_throw = 20;   // more momentum for e-paper (default 10)
     lv_indev_drv_register(&indev_drv);
 }
 
@@ -189,5 +218,14 @@ static void tdeck_pro_touchpad_read(lv_indev_drv_t * indev_drv, lv_indev_data_t 
 
     // uint8_t touched = tDeckProTouch.getPoint(&last_x, &last_y, 1);
     // Serial.printf("[t=%u x=%u y=%u]    ", touched, last_x, last_y);
+}
+
+/* virtual */ void TDeckProScreen::forceFullRefresh(uint8_t color) {
+    // Bypass LVGL and call GxEPD2 clearScreen() directly
+    // This writes to BOTH buffers (0x10 and 0x13) and triggers a full refresh
+    // which properly resets the electrophoretic particles
+    display.clearScreen(color);
+    // Reset the partial update counter since we just did a full refresh
+    partial_update_count = 0;
 }
 

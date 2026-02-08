@@ -17,13 +17,21 @@ class UChat : public BaseApp {
 
         void openConversation(const RNS::Bytes& their_hash);
         void sendToCurrentConversation(const char* title, const char* content);
+        void triggerAnnounce();
 
+        // Pagination controls
+        void nextAnnouncePage();
+        void prevAnnouncePage();
+        void nextConversationPage();
+        void prevConversationPage();
 
     protected:
             RnsService * _rns_service;
 
             void renderMainMenu();
-            void renderMessageInConversation(const Retcon::LXMF::Message& message);
+            void renderAnnounceList();
+            void renderConversationList();
+            lv_obj_t* renderMessageInConversation(lv_obj_t* parent, const Retcon::LXMF::Message& message);
             void drawCurrentConversation(bool clear=true);
 
             lv_obj_t * tabview;
@@ -31,11 +39,17 @@ class UChat : public BaseApp {
             lv_obj_t * announceview;
             lv_obj_t * statusview;
 
-
             lv_obj_t * conversation_modal = nullptr;
+            lv_obj_t * message_container = nullptr;
             Retcon::LXMF::Conversation *current_conv = nullptr;
 
             set<shared_ptr<Retcon::LXMF::Message>> _queued_msgs;
 
+            // Pagination state
+            static const size_t ITEMS_PER_PAGE = 15;
+            size_t _announce_page = 0;
+            size_t _conversation_page = 0;
+            vector<Retcon::LXMF::AnnounceData> _announces_cache;
+            vector<Retcon::LXMF::ConversationMetaInfo> _conversations_cache;
 
 };

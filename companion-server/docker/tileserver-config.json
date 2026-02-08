@@ -1,0 +1,22 @@
+{
+  "options": {
+    "paths": {
+      "root": "/data",
+      "mbtiles": "/data/mbtiles"
+    },
+    "serveAllStyles": true
+  },
+  "data": {
+    "v3": {
+      "mbtiles": "tiles.mbtiles"
+    }
+  },
+  "styles": {
+    "grayscale": {
+      "style": "grayscale-style.json",
+      "tilejson": {
+        "bounds": [-180, -85, 180, 85]
+      }
+    }
+  }
+}

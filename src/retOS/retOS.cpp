@@ -3,9 +3,19 @@
 #include "../apps/BaseApp.h"
 #include <lvgl.h>
 #include "apps/Settings.h"
-
+#include <cstring>
 
 using namespace std;
+
+// External function from emulator main.cpp for auto-launch
+#ifdef RET_PLATFORM_EMU
+#ifndef UNIT_TEST
+extern "C" const char* emu_get_autolaunch_app();
+#else
+// Stub for unit tests
+extern "C" const char* emu_get_autolaunch_app() { return nullptr; }
+#endif
+#endif
 RetOS* retOsGlobalPtr;
 
 RetOS::RetOS(RetHal hal,forward_list<ServiceInfo> services, forward_list<AppInfo> apps, AppInfo launcher) :
@@ -60,6 +70,22 @@ void _ui_loop(void* _) {
         Serial.print("Can't set timezone to ");
         Serial.println(timezone);
     }
+
+#ifdef RET_PLATFORM_EMU
+    // Check for auto-launch app from command line
+    const char* autoLaunchApp = emu_get_autolaunch_app();
+    if (autoLaunchApp != nullptr) {
+        Serial.printf("[Emulator] Auto-launching app: %s\n", autoLaunchApp);
+        // Find the app by name and launch it
+        for (const AppInfo& app : retos->appInfo()) {
+            if (strcasecmp(app.name, autoLaunchApp) == 0) {
+                Serial.printf("[Emulator] Found app '%s' with id %d, launching...\n", app.name, app.id);
+                retos->launchApp(app.id);
+                break;
+            }
+        }
+    }
+#endif
 
     // main loop
     while(true) {
@@ -178,7 +204,7 @@ void RetOS::backToLauncher(){
             _ui.hideBackButton();
             // launcher is NOT set to active app so it never really gets deleted. Just hidden.
      }, 25);
-    
+
 }
 
 

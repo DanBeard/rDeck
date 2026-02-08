@@ -1,0 +1,47 @@
+services:
+  valhalla:
+    image: ghcr.io/valhalla/valhalla-scripted:latest
+    container_name: valhalla
+    ports:
+      - "8002:8002"
+    volumes:
+      - ./data/valhalla:/custom_files
+      - ./data/pbf:/pbf:ro
+    environment:
+      - tile_urls=${VALHALLA_PBF_URL:-file:///pbf/${REGION_PBF_FILE:-region.osm.pbf}}
+      - build_elevation=True
+      - build_admins=True
+      - build_time_zones=True
+      - server_threads=2
+      - serve_tiles=True
+      - force_rebuild=False
+      - update_existing_config=False
+    restart: unless-stopped
+
+  nominatim:
+    image: mediagis/nominatim:5.2
+    container_name: nominatim
+    ports:
+      - "8080:8080"
+    shm_size: 1g
+    volumes:
+      - ./data/nominatim:/var/lib/postgresql/16/main
+      - ./data/pbf:/pbf:ro
+    environment:
+      - PBF_PATH=${NOMINATIM_PBF_PATH:-/pbf/${REGION_PBF_FILE:-region.osm.pbf}}
+      - NOMINATIM_PASSWORD=companion_server
+      - FREEZE=true
+      - IMPORT_STYLE=full
+      - THREADS=2
+    restart: unless-stopped
+
+  tileserver:
+    image: maptiler/tileserver-gl:latest
+    container_name: tileserver
+    ports:
+      - "${TILESERVER_PORT:-8081}:8080"
+    volumes:
+      - ./data/mbtiles:/data/mbtiles:ro
+      - ./data/tileserver:/data/config:ro
+    command: --config /data/config/tileserver-config.json --verbose
+    restart: unless-stopped

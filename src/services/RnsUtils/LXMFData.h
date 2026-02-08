@@ -4,10 +4,19 @@
 #include <set>
 #include "Reticulum.h"
 
+#ifdef RET_PLATFORM_EMU
+#include <Arduino.h>
+#endif
+
+#ifdef UNIT_TEST
+// Forward declare FS for test functions
+class FS;
+#endif
+
 // data classes and serialization/deserialization helper for LXMF data
 
 // up this every time you change a schema. It means we wipe the data but avoid corruption
-#define LXMF_SCHEMA_VERSION 1
+#define LXMF_SCHEMA_VERSION 3
 // Reminder: Keep alignment in mind. This is not packed on purpose for code size and speed
 #define RNS_HASH_SIZE_BYTES 16
 #define RNS_APP_DATA_SIZE_BYTES  285
@@ -19,9 +28,11 @@ namespace Retcon::LXMF {
     class AnnounceData {
         public:
             AnnounceData(JsonArray &array);
-            AnnounceData(const RNS::Bytes &dest, const RNS::Bytes &app_data ,const time_t last_heard);
+            AnnounceData(const RNS::Bytes &dest, const RNS::Bytes &app_data, const time_t last_heard);
+            AnnounceData(const RNS::Bytes &dest, const RNS::Bytes &app_data, const RNS::Bytes &public_key, const time_t last_heard);
             RNS::Bytes dest;
             RNS::Bytes app_data;
+            RNS::Bytes public_key;
             time_t last_heard;
 
             void serialize(JsonArray &array);
@@ -46,10 +57,10 @@ namespace Retcon::LXMF {
                             if(nameBin.size() > 0) {
                                 // this should add the /0 ... right?
                             return string((const char*)nameBin.data(), nameBin.size());
-                        } 
                         }
-                       
-                        
+                        }
+
+
                         if(doc[0].is<string>()) {
                             string nameStr = doc[0].as<string>();
                             if(nameStr.size() > 0) {
@@ -63,6 +74,30 @@ namespace Retcon::LXMF {
                 // if we can't find a name in app_data then just the hex *shrug*
                 return dest.toHex();
 
+            }
+
+            // Returns device type from app_data[2] if present
+            // Expected values: "rdeck", "companion-server", or empty string if unknown
+            string deviceType() const {
+                if (app_data.size() > 3 && ((app_data.data()[0] >= 0x90 && app_data.data()[0] <= 0x9f) || app_data.data()[0] == 0xdc)) {
+                    JsonDocument doc;
+                    deserializeMsgPack(doc, app_data.data(), app_data.size());
+                    if (doc.is<JsonArray>() && doc.size() > 2) {
+                        // device_type is at position [2]
+                        if (doc[2].is<string>()) {
+                            return doc[2].as<string>();
+                        }
+                    }
+                }
+                return "";
+            }
+
+            bool isRdeck() const {
+                return deviceType() == "rdeck";
+            }
+
+            bool isCompanionServer() const {
+                return deviceType() == "companion-server";
             }
     };
 
@@ -177,7 +212,15 @@ namespace Retcon::LXMF {
     // only one conversation at a time
     Conversation* loadAsCurrentConversation(const RNS::Bytes &src_hash);
     void persistCurrentConversation();
-    void addMessageToConversation(const Message &msg);
+    // their_hash is the other party in the conversation (sender for received, recipient for sent)
+    void addMessageToConversation(const Message &msg, const RNS::Bytes &their_hash);
+
+#ifdef UNIT_TEST
+    // Reset all in-memory state for testing purposes
+    void resetAllState();
+    // Set a test filesystem (used instead of retOsGlobalPtr->hal().fs when non-null)
+    void setTestFilesystem(::FS* fs);
+#endif
 }
 
 

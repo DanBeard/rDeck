@@ -1,0 +1,741 @@
+#include "Maps.h"
+#include "services/RnsService.h"
+#include "services/RnsUtils/TrustedServers.h"
+#include "lvgl.h"
+#include <cmath>
+
+// Keyboard input handling
+static void mapKeyCallback(lv_event_t* e);
+static void searchInputCallback(lv_event_t* e);
+static void searchResultCallback(lv_event_t* e);
+
+// TileKey comparison operators
+bool Maps::TileKey::operator<(const TileKey& other) const {
+    if (z != other.z) return z < other.z;
+    if (x != other.x) return x < other.x;
+    return y < other.y;
+}
+
+bool Maps::TileKey::operator==(const TileKey& other) const {
+    return z == other.z && x == other.x && y == other.y;
+}
+
+void Maps::start(RetOS* retos) {
+    _keep_awake = true;
+    drawUI();
+
+    // Find a trusted server with maps capability
+    findMapsServer();
+
+    // Request initial tiles
+    requestVisibleTiles();
+}
+
+void Maps::tick(const unsigned long tickMillis) {
+    // Request tiles if we have pending area to fill
+    if (tickMillis - _lastTileRequest > TILE_REQUEST_THROTTLE_MS) {
+        requestVisibleTiles();
+        _lastTileRequest = tickMillis;
+    }
+}
+
+void Maps::stop() {
+    _tileCache.clear();
+    _tileLruOrder.clear();
+    _pendingTileRequests.clear();
+    _routePoints.clear();
+    _searchResults.clear();
+}
+
+void Maps::drawUI() {
+    // Main container
+    lv_obj_t* main = lv_obj_create(screen);
+    lv_obj_set_size(main, LV_PCT(100), LV_PCT(100));
+    lv_obj_align(main, LV_ALIGN_TOP_LEFT, 0, 0);
+    lv_obj_set_style_pad_all(main, 0, LV_PART_MAIN);
+    lv_obj_set_style_border_width(main, 0, LV_PART_MAIN);
+    lv_obj_clear_flag(main, LV_OBJ_FLAG_SCROLLABLE);
+
+    // Map canvas - monochrome buffer
+    _map_canvas = lv_canvas_create(main);
+    static lv_color_t cbuf[LV_CANVAS_BUF_SIZE_INDEXED_1BIT(CANVAS_WIDTH, CANVAS_HEIGHT)];
+    lv_canvas_set_buffer(_map_canvas, cbuf, CANVAS_WIDTH, CANVAS_HEIGHT, LV_IMG_CF_INDEXED_1BIT);
+    lv_obj_align(_map_canvas, LV_ALIGN_TOP_LEFT, 0, 0);
+
+    // Set palette for 1-bit canvas (0=white, 1=black)
+    lv_canvas_set_palette(_map_canvas, 0, lv_color_white());
+    lv_canvas_set_palette(_map_canvas, 1, lv_color_black());
+
+    // Clear canvas to white
+    clearCanvas();
+
+    // Status bar at bottom
+    _status_bar = lv_obj_create(main);
+    lv_obj_set_size(_status_bar, CANVAS_WIDTH, 20);
+    lv_obj_align(_status_bar, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+    lv_obj_set_style_pad_all(_status_bar, 2, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(_status_bar, lv_color_hex(0xEEEEEE), LV_PART_MAIN);
+    lv_obj_set_flex_flow(_status_bar, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(_status_bar, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+    _zoom_label = lv_label_create(_status_bar);
+    lv_label_set_text_fmt(_zoom_label, "Z%d", _zoom);
+    lv_obj_set_style_text_font(_zoom_label, &lv_font_montserrat_14, LV_PART_MAIN);
+
+    _coords_label = lv_label_create(_status_bar);
+    lv_label_set_text_fmt(_coords_label, "%.4f, %.4f", _centerLat, _centerLon);
+    lv_obj_set_style_text_font(_coords_label, &lv_font_montserrat_14, LV_PART_MAIN);
+
+    // Loading spinner (hidden by default)
+    _loading_spinner = lv_spinner_create(main, 1000, 60);
+    lv_obj_set_size(_loading_spinner, 30, 30);
+    lv_obj_align(_loading_spinner, LV_ALIGN_TOP_RIGHT, -5, 5);
+    lv_obj_add_flag(_loading_spinner, LV_OBJ_FLAG_HIDDEN);
+
+    // Search overlay (hidden by default)
+    _search_overlay = lv_obj_create(main);
+    lv_obj_set_size(_search_overlay, LV_PCT(90), LV_PCT(80));
+    lv_obj_align(_search_overlay, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_style_bg_color(_search_overlay, lv_color_white(), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(_search_overlay, LV_OPA_90, LV_PART_MAIN);
+    lv_obj_set_flex_flow(_search_overlay, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_all(_search_overlay, 5, LV_PART_MAIN);
+    lv_obj_add_flag(_search_overlay, LV_OBJ_FLAG_HIDDEN);
+
+    // Search input
+    _search_input = lv_textarea_create(_search_overlay);
+    lv_obj_set_size(_search_input, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_textarea_set_one_line(_search_input, true);
+    lv_textarea_set_placeholder_text(_search_input, "Search location...");
+    lv_obj_add_event_cb(_search_input, searchInputCallback, LV_EVENT_READY, this);
+
+    // Search results list
+    _search_results_list = lv_list_create(_search_overlay);
+    lv_obj_set_size(_search_results_list, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_flex_grow(_search_results_list, 1);
+
+    // Register keyboard handler for the main screen
+    lv_obj_add_event_cb(main, mapKeyCallback, LV_EVENT_KEY, this);
+    lv_group_add_obj(_retos->ui()->default_input_group(), main);
+    lv_group_focus_obj(main);
+}
+
+static void mapKeyCallback(lv_event_t* e) {
+    Maps* app = (Maps*)lv_event_get_user_data(e);
+    if (!app) return;
+
+    uint32_t key = lv_event_get_key(e);
+    const int PAN_STEP = 32;  // Pixels to pan per keypress
+
+    switch (key) {
+        case 'w':
+        case 'W':
+        case LV_KEY_UP:
+            app->pan(0, -PAN_STEP);
+            break;
+        case 's':
+        case 'S':
+        case LV_KEY_DOWN:
+            app->pan(0, PAN_STEP);
+            break;
+        case 'a':
+        case 'A':
+        case LV_KEY_LEFT:
+            app->pan(-PAN_STEP, 0);
+            break;
+        case 'd':
+        case 'D':
+        case LV_KEY_RIGHT:
+            app->pan(PAN_STEP, 0);
+            break;
+        case '+':
+        case '=':
+            app->zoom(1);
+            break;
+        case '-':
+        case '_':
+            app->zoom(-1);
+            break;
+        case 'c':
+        case 'C':
+            app->centerOnGps();
+            break;
+        case 'f':
+        case 'F':
+            app->toggleFollowGps();
+            break;
+        case '/':
+            app->startSearch();
+            break;
+        case LV_KEY_ESC:
+            if (app->searchMode()) {
+                lv_obj_add_flag(app->getSearchOverlay(), LV_OBJ_FLAG_HIDDEN);
+                app->searchMode() = false;
+            }
+            break;
+    }
+}
+
+static void searchInputCallback(lv_event_t* e) {
+    Maps* app = (Maps*)lv_event_get_user_data(e);
+    if (!app) return;
+
+    const char* query = lv_textarea_get_text(app->getSearchInput());
+    if (query && strlen(query) > 0) {
+        app->performSearch(query);
+    }
+}
+
+static void searchResultCallback(lv_event_t* e) {
+    Maps* app = (Maps*)lv_event_get_user_data(e);
+    if (!app) return;
+
+    lv_obj_t* btn = lv_event_get_target(e);
+    uint32_t idx = (uint32_t)(uintptr_t)lv_obj_get_user_data(btn);
+
+    auto& results = app->getSearchResults();
+    if (idx < results.size()) {
+        app->goToLocation(results[idx].lat, results[idx].lon);
+        lv_obj_add_flag(app->getSearchOverlay(), LV_OBJ_FLAG_HIDDEN);
+        app->searchMode() = false;
+    }
+}
+
+bool Maps::findMapsServer() {
+    auto& trustedServers = Retcon::Service::getTrustedServers();
+    auto servers = trustedServers.getTrustedServers();
+
+    for (const auto& server : servers) {
+        for (const auto& svc : server.services) {
+            if (svc == "maps") {
+                _mapsServerHash = server.hash;
+                Serial.printf("[Maps] Found maps server: %s\n", server.name.c_str());
+                return true;
+            }
+        }
+    }
+
+    Serial.println("[Maps] No trusted maps server found");
+    return false;
+}
+
+void Maps::clearCanvas() {
+    lv_canvas_fill_bg(_map_canvas, lv_color_white(), LV_OPA_100);
+}
+
+void Maps::renderMap() {
+    clearCanvas();
+
+    // Calculate which tiles are visible
+    uint32_t centerTileX, centerTileY;
+    latLonToTile(_centerLat, _centerLon, _zoom, centerTileX, centerTileY);
+
+    // Calculate pixel position within center tile
+    int centerPixelX, centerPixelY;
+    latLonToPixel(_centerLat, _centerLon, _zoom, centerPixelX, centerPixelY);
+    int tilePixelX = centerPixelX % TILE_SIZE;
+    int tilePixelY = centerPixelY % TILE_SIZE;
+
+    // Draw tiles in a 3x3 grid around center (enough to cover 240x280 screen)
+    for (int dy = -1; dy <= 1; dy++) {
+        for (int dx = -1; dx <= 1; dx++) {
+            TileKey key = {_zoom, centerTileX + dx, centerTileY + dy};
+
+            // Calculate screen position for this tile
+            int screenX = (CANVAS_WIDTH / 2) - tilePixelX + (dx * TILE_SIZE);
+            int screenY = (CANVAS_HEIGHT / 2) - tilePixelY + (dy * TILE_SIZE);
+
+            // Check cache
+            CachedTile cached;
+            if (getTileFromCache(key, cached)) {
+                drawTile(screenX, screenY, cached.data);
+            }
+            // else: tile not cached, will be requested in requestVisibleTiles()
+        }
+    }
+
+    // Draw GPS marker if we have position
+    if (_hasGps) {
+        drawGpsMarker();
+    }
+
+    // Draw route if we have one
+    if (_hasRoute && _routePoints.size() >= 4) {
+        // TODO: Draw route polyline
+    }
+
+    // Update status bar
+    drawStatusBar();
+
+    // Force canvas refresh
+    lv_obj_invalidate(_map_canvas);
+}
+
+void Maps::drawTile(int screenX, int screenY, const std::vector<uint8_t>& tileData) {
+    // tileData is 2048 bytes (128x128 pixels, 1 bit per pixel, 8 pixels per byte)
+    if (tileData.size() != (TILE_SIZE * TILE_SIZE / 8)) {
+        Serial.printf("[Maps] Invalid tile data size: %zu (expected %d)\n", tileData.size(), TILE_SIZE * TILE_SIZE / 8);
+        return;
+    }
+
+    // Draw each pixel of the tile to the canvas
+    for (int ty = 0; ty < TILE_SIZE; ty++) {
+        int cy = screenY + ty;
+        if (cy < 0 || cy >= CANVAS_HEIGHT - 20) continue;  // -20 for status bar
+
+        for (int tx = 0; tx < TILE_SIZE; tx++) {
+            int cx = screenX + tx;
+            if (cx < 0 || cx >= CANVAS_WIDTH) continue;
+
+            // Get pixel from packed bit data
+            int bitIndex = ty * TILE_SIZE + tx;
+            int byteIndex = bitIndex / 8;
+            int bitOffset = 7 - (bitIndex % 8);  // MSB first
+            bool isBlack = (tileData[byteIndex] >> bitOffset) & 1;
+
+            // Set pixel on canvas
+            lv_color_t color = isBlack ? lv_color_black() : lv_color_white();
+            lv_canvas_set_px_color(_map_canvas, cx, cy, color);
+        }
+    }
+}
+
+void Maps::drawGpsMarker() {
+    // Calculate screen position of GPS
+    int gpsPixelX, gpsPixelY;
+    latLonToPixel(_gpsLat, _gpsLon, _zoom, gpsPixelX, gpsPixelY);
+
+    int centerPixelX, centerPixelY;
+    latLonToPixel(_centerLat, _centerLon, _zoom, centerPixelX, centerPixelY);
+
+    int screenX = (CANVAS_WIDTH / 2) + (gpsPixelX - centerPixelX);
+    int screenY = (CANVAS_HEIGHT / 2) + (gpsPixelY - centerPixelY);
+
+    // Draw a small crosshair at GPS position
+    if (screenX >= 0 && screenX < CANVAS_WIDTH && screenY >= 0 && screenY < CANVAS_HEIGHT - 20) {
+        // Draw circle
+        lv_draw_rect_dsc_t rect_dsc;
+        lv_draw_rect_dsc_init(&rect_dsc);
+        rect_dsc.bg_color = lv_color_black();
+        rect_dsc.radius = 5;
+
+        lv_area_t area = {
+            .x1 = (lv_coord_t)(screenX - 5),
+            .y1 = (lv_coord_t)(screenY - 5),
+            .x2 = (lv_coord_t)(screenX + 5),
+            .y2 = (lv_coord_t)(screenY + 5)
+        };
+
+        // Simple crosshair since lv_canvas_draw_rect isn't available
+        for (int i = -4; i <= 4; i++) {
+            if (screenX + i >= 0 && screenX + i < CANVAS_WIDTH) {
+                lv_canvas_set_px_color(_map_canvas, screenX + i, screenY, lv_color_black());
+            }
+            if (screenY + i >= 0 && screenY + i < CANVAS_HEIGHT - 20) {
+                lv_canvas_set_px_color(_map_canvas, screenX, screenY + i, lv_color_black());
+            }
+        }
+    }
+}
+
+void Maps::drawStatusBar() {
+    lv_label_set_text_fmt(_zoom_label, "Z%d%s", _zoom, _followGps ? " [F]" : "");
+    lv_label_set_text_fmt(_coords_label, "%.4f, %.4f", _centerLat, _centerLon);
+}
+
+void Maps::requestTile(uint8_t z, uint32_t x, uint32_t y) {
+    TileKey key = {z, x, y};
+
+    // Don't request if already pending or cached
+    if (_pendingTileRequests.count(key) > 0) return;
+
+    CachedTile cached;
+    if (getTileFromCache(key, cached)) return;
+
+    // Check pending request limit
+    if (_pendingTileRequests.size() >= MAX_PENDING_REQUESTS) return;
+
+    if (_mapsServerHash.size() == 0) {
+        if (!findMapsServer()) return;
+    }
+
+    RnsService* rns = _retos->fetchService<RnsService>();
+    if (!rns) return;
+
+    // Show loading indicator
+    lv_obj_clear_flag(_loading_spinner, LV_OBJ_FLAG_HIDDEN);
+
+    // Generate request ID for tracking
+    uint32_t requestId = (uint32_t)(millis() & 0xFFFFFFFF);
+    _pendingTileRequests[key] = requestId;
+
+    rns->requestMapTile(_mapsServerHash, z, x, y, Retcon::Service::TileFormat::MONO_RLE);
+}
+
+void Maps::requestVisibleTiles() {
+    // Calculate which tiles are visible
+    uint32_t centerTileX, centerTileY;
+    latLonToTile(_centerLat, _centerLon, _zoom, centerTileX, centerTileY);
+
+    // Request tiles in a 3x3 grid around center
+    for (int dy = -1; dy <= 1; dy++) {
+        for (int dx = -1; dx <= 1; dx++) {
+            requestTile(_zoom, centerTileX + dx, centerTileY + dy);
+        }
+    }
+}
+
+bool Maps::getTileFromCache(const TileKey& key, CachedTile& tile) {
+    auto it = _tileCache.find(key);
+    if (it != _tileCache.end()) {
+        it->second.lastAccess = millis();
+        tile = it->second;
+        return true;
+    }
+
+    // Try loading from disk
+    if (loadTileFromDisk(key, tile)) {
+        addTileToCache(key, tile.data);
+        return true;
+    }
+
+    return false;
+}
+
+void Maps::addTileToCache(const TileKey& key, const std::vector<uint8_t>& data) {
+    // Evict if full
+    while (_tileCache.size() >= MAX_CACHED_TILES) {
+        evictOldestTile();
+    }
+
+    CachedTile cached;
+    cached.data = data;
+    cached.lastAccess = millis();
+
+    _tileCache[key] = cached;
+    _tileLruOrder.push_back(key);
+
+    // Save to disk cache
+    saveTileToDisk(key, data);
+}
+
+void Maps::evictOldestTile() {
+    if (_tileLruOrder.empty()) return;
+
+    TileKey oldest = _tileLruOrder.front();
+    _tileLruOrder.pop_front();
+    _tileCache.erase(oldest);
+}
+
+std::vector<uint8_t> Maps::decompressRle(const std::vector<uint8_t>& rleData) {
+    std::vector<uint8_t> result;
+    result.reserve(TILE_SIZE * TILE_SIZE / 8);
+
+    for (size_t i = 0; i + 1 < rleData.size(); i += 2) {
+        uint8_t count = rleData[i];
+        uint8_t value = rleData[i + 1];
+        for (uint8_t j = 0; j < count; j++) {
+            result.push_back(value);
+        }
+    }
+
+    return result;
+}
+
+std::string Maps::getTileCachePath(const TileKey& key) {
+    char path[64];
+    snprintf(path, sizeof(path), "/tiles/%d_%u_%u.bin", key.z, key.x, key.y);
+    return std::string(path);
+}
+
+bool Maps::loadTileFromDisk(const TileKey& key, CachedTile& tile) {
+    // Get filesystem from RetOS
+    FS* fs = _retos->hal().fs;
+    if (!fs) return false;
+
+    std::string path = getTileCachePath(key);
+    if (!fs->exists(path.c_str())) return false;
+
+    File file = fs->open(path.c_str(), FILE_READ);
+    if (!file) return false;
+
+    size_t size = file.size();
+    tile.data.resize(size);
+    file.read(tile.data.data(), size);
+    file.close();
+
+    tile.lastAccess = millis();
+    return true;
+}
+
+void Maps::saveTileToDisk(const TileKey& key, const std::vector<uint8_t>& data) {
+    FS* fs = _retos->hal().fs;
+    if (!fs) return;
+
+    // Ensure tiles directory exists
+    if (!fs->exists("/tiles")) {
+        fs->mkdir("/tiles");
+    }
+
+    std::string path = getTileCachePath(key);
+    File file = fs->open(path.c_str(), FILE_WRITE, true);
+    if (!file) return;
+
+    file.write(data.data(), data.size());
+    file.close();
+}
+
+// Coordinate conversion utilities
+void Maps::latLonToTile(double lat, double lon, uint8_t z, uint32_t& tileX, uint32_t& tileY) {
+    double n = pow(2.0, z);
+    tileX = (uint32_t)((lon + 180.0) / 360.0 * n);
+    double latRad = lat * M_PI / 180.0;
+    tileY = (uint32_t)((1.0 - log(tan(latRad) + 1.0 / cos(latRad)) / M_PI) / 2.0 * n);
+}
+
+void Maps::tileToLatLon(uint32_t tileX, uint32_t tileY, uint8_t z, double& lat, double& lon) {
+    double n = pow(2.0, z);
+    lon = tileX / n * 360.0 - 180.0;
+    double latRad = atan(sinh(M_PI * (1 - 2 * tileY / n)));
+    lat = latRad * 180.0 / M_PI;
+}
+
+void Maps::latLonToPixel(double lat, double lon, uint8_t z, int& pixelX, int& pixelY) {
+    double n = pow(2.0, z);
+    pixelX = (int)((lon + 180.0) / 360.0 * n * TILE_SIZE);
+    double latRad = lat * M_PI / 180.0;
+    pixelY = (int)((1.0 - log(tan(latRad) + 1.0 / cos(latRad)) / M_PI) / 2.0 * n * TILE_SIZE);
+}
+
+// Navigation
+void Maps::pan(int dx, int dy) {
+    // Convert pixel delta to lat/lon delta
+    double scale = 360.0 / pow(2.0, _zoom) / TILE_SIZE;
+
+    _centerLon += dx * scale;
+    _centerLat -= dy * scale * cos(_centerLat * M_PI / 180.0);
+
+    // Clamp longitude
+    while (_centerLon > 180.0) _centerLon -= 360.0;
+    while (_centerLon < -180.0) _centerLon += 360.0;
+
+    // Clamp latitude
+    if (_centerLat > 85.0) _centerLat = 85.0;
+    if (_centerLat < -85.0) _centerLat = -85.0;
+
+    // Disable follow mode when user pans
+    _followGps = false;
+
+    renderMap();
+    requestVisibleTiles();
+}
+
+void Maps::zoom(int delta) {
+    int newZoom = _zoom + delta;
+    if (newZoom < MIN_ZOOM) newZoom = MIN_ZOOM;
+    if (newZoom > MAX_ZOOM) newZoom = MAX_ZOOM;
+
+    if (newZoom != _zoom) {
+        _zoom = newZoom;
+        renderMap();
+        requestVisibleTiles();
+    }
+}
+
+void Maps::centerOnGps() {
+    if (_hasGps) {
+        _centerLat = _gpsLat;
+        _centerLon = _gpsLon;
+        renderMap();
+        requestVisibleTiles();
+    }
+}
+
+void Maps::toggleFollowGps() {
+    _followGps = !_followGps;
+    if (_followGps && _hasGps) {
+        centerOnGps();
+    }
+    drawStatusBar();
+}
+
+// Search
+void Maps::startSearch() {
+    _searchMode = true;
+    lv_obj_clear_flag(_search_overlay, LV_OBJ_FLAG_HIDDEN);
+    lv_textarea_set_text(_search_input, "");
+    lv_obj_clean(_search_results_list);
+    lv_group_add_obj(_retos->ui()->default_input_group(), _search_input);
+    lv_group_focus_obj(_search_input);
+}
+
+void Maps::performSearch(const std::string& query) {
+    if (_mapsServerHash.size() == 0 && !findMapsServer()) {
+        return;
+    }
+
+    RnsService* rns = _retos->fetchService<RnsService>();
+    if (!rns) return;
+
+    // Bias search near current map center
+    int32_t biasLat = (int32_t)(_centerLat * 1e7);
+    int32_t biasLon = (int32_t)(_centerLon * 1e7);
+
+    rns->requestGeocode(_mapsServerHash, query, biasLat, biasLon, true, 5);
+
+    // Show loading
+    lv_obj_clean(_search_results_list);
+    lv_list_add_text(_search_results_list, "Searching...");
+}
+
+void Maps::displaySearchResults(const Retcon::Service::MapGeocodeResponsePayload& response) {
+    lv_obj_clean(_search_results_list);
+    _searchResults.clear();
+
+    if (!response.error.empty()) {
+        lv_list_add_text(_search_results_list, response.error.c_str());
+        return;
+    }
+
+    if (response.results.empty()) {
+        lv_list_add_text(_search_results_list, "No results found");
+        return;
+    }
+
+    _searchResults = response.results;
+
+    for (size_t i = 0; i < response.results.size(); i++) {
+        const auto& result = response.results[i];
+
+        // Truncate display name for UI
+        std::string displayName = result.display_name;
+        if (displayName.length() > 40) {
+            displayName = displayName.substr(0, 37) + "...";
+        }
+
+        lv_obj_t* btn = lv_list_add_btn(_search_results_list, NULL, displayName.c_str());
+        lv_obj_set_user_data(btn, (void*)(uintptr_t)i);
+        lv_obj_add_event_cb(btn, searchResultCallback, LV_EVENT_CLICKED, this);
+    }
+}
+
+void Maps::goToLocation(int32_t lat, int32_t lon) {
+    _centerLat = lat / 1e7;
+    _centerLon = lon / 1e7;
+    _followGps = false;
+    renderMap();
+    requestVisibleTiles();
+}
+
+// Route (placeholder for now)
+void Maps::startRouting() {
+    _routeMode = true;
+    _hasRouteStart = false;
+    // TODO: Implement route start/end selection UI
+}
+
+void Maps::calculateRoute() {
+    if (!_hasRouteStart) return;
+    if (_mapsServerHash.size() == 0 && !findMapsServer()) return;
+
+    RnsService* rns = _retos->fetchService<RnsService>();
+    if (!rns) return;
+
+    int32_t startLat = (int32_t)(_routeStart.lat * 1e7);
+    int32_t startLon = (int32_t)(_routeStart.lon * 1e7);
+    int32_t endLat = (int32_t)(_routeEnd.lat * 1e7);
+    int32_t endLon = (int32_t)(_routeEnd.lon * 1e7);
+
+    rns->requestRoute(_mapsServerHash, startLat, startLon, endLat, endLon, Retcon::Service::TravelMode::WALK);
+}
+
+void Maps::displayRoute(const Retcon::Service::MapRouteResponsePayload& response) {
+    if (!response.error.empty()) {
+        Serial.printf("[Maps] Route error: %s\n", response.error.c_str());
+        return;
+    }
+
+    _routePoints = response.points;
+    _hasRoute = true;
+    renderMap();
+}
+
+void Maps::clearRoute() {
+    _routePoints.clear();
+    _hasRoute = false;
+    renderMap();
+}
+
+EventStatus Maps::onEvent(const Event& event) {
+    switch (event.type) {
+        case EventType::MAP_TILE_RECEIVED: {
+            auto payload = std::static_pointer_cast<Retcon::Service::MapTileResponsePayload>(event.data);
+            if (payload) {
+                TileKey key = {payload->z, payload->x, payload->y};
+
+                // Remove from pending
+                _pendingTileRequests.erase(key);
+
+                // Hide spinner if no more pending
+                if (_pendingTileRequests.empty()) {
+                    lv_obj_add_flag(_loading_spinner, LV_OBJ_FLAG_HIDDEN);
+                }
+
+                if (payload->error.empty() && !payload->data.empty()) {
+                    // Decompress RLE data
+                    std::vector<uint8_t> decompressed;
+                    if (payload->format == Retcon::Service::TileFormat::MONO_RLE) {
+                        decompressed = decompressRle(payload->data);
+                    } else {
+                        decompressed = payload->data;
+                    }
+
+                    // Verify size
+                    if (decompressed.size() == TILE_SIZE * TILE_SIZE / 8) {
+                        addTileToCache(key, decompressed);
+                        renderMap();
+                    }
+                }
+            }
+            return EventStatus::HANDLED;
+        }
+
+        case EventType::MAP_GEOCODE_RESULTS: {
+            auto payload = std::static_pointer_cast<Retcon::Service::MapGeocodeResponsePayload>(event.data);
+            if (payload) {
+                displaySearchResults(*payload);
+            }
+            return EventStatus::HANDLED;
+        }
+
+        case EventType::MAP_ROUTE_RECEIVED: {
+            auto payload = std::static_pointer_cast<Retcon::Service::MapRouteResponsePayload>(event.data);
+            if (payload) {
+                displayRoute(*payload);
+            }
+            return EventStatus::HANDLED;
+        }
+
+        case EventType::LOCATION_CHANGE: {
+            // Update GPS position
+            // The event args contain lat/lon as int32 * 1e7
+            _gpsLat = ((int32_t)event.args[0]) / 1e7;
+            _gpsLon = ((int32_t)event.args[1]) / 1e7;
+            _hasGps = true;
+
+            if (_followGps) {
+                _centerLat = _gpsLat;
+                _centerLon = _gpsLon;
+                renderMap();
+                requestVisibleTiles();
+            } else {
+                // Just redraw GPS marker
+                renderMap();
+            }
+            return EventStatus::HANDLED_PROPOGATE;
+        }
+
+        default:
+            return EventStatus::IGNORED;
+    }
+}

@@ -3,6 +3,10 @@
 #include <Utilities/OS.h>
 #include <Log.h>
 
+#ifdef RET_PLATFORM_EMU
+#include <Arduino.h>
+#endif
+
 // TODO Abstract away SD to a generic file system retHal
 // RIght now we need an SD though. It's just too much space
 #include <SD.h>

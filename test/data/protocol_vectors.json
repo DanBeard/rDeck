@@ -1,0 +1,166 @@
+{
+  "description": "Shared test vectors for C++ and Python protocol compatibility",
+  "version": "1.0.0",
+  "message_types": {
+    "TRUST_OFFER": 1,
+    "TRUST_ACCEPT": 2,
+    "TRUST_REVOKE": 3,
+    "NTP_REQUEST": 16,
+    "NTP_RESPONSE": 17,
+    "SEARCH_REQUEST": 32,
+    "SEARCH_RESPONSE": 33
+  },
+  "vectors": {
+    "trust_offer_basic": {
+      "description": "Basic TRUST_OFFER with server name and two services",
+      "msg_type": 1,
+      "service": "trust",
+      "payload": {
+        "server_name": "TestServer",
+        "services": ["ntp", "search"]
+      },
+      "payload_msgpack_hex": "82ab7365727665725f6e616d65aa54657374536572766572a8736572766963657392a36e7470a6736561726368"
+    },
+    "trust_offer_empty_services": {
+      "description": "TRUST_OFFER with no services",
+      "msg_type": 1,
+      "service": "trust",
+      "payload": {
+        "server_name": "EmptyServer",
+        "services": []
+      },
+      "payload_msgpack_hex": "82ab7365727665725f6e616d65ab456d707479536572766572a8736572766963657390"
+    },
+    "trust_offer_single_service": {
+      "description": "TRUST_OFFER with one service",
+      "msg_type": 1,
+      "service": "trust",
+      "payload": {
+        "server_name": "NTPOnly",
+        "services": ["ntp"]
+      },
+      "payload_msgpack_hex": "82ab7365727665725f6e616d65a74e54504f6e6c79a8736572766963657391a36e7470"
+    },
+    "trust_accept_basic": {
+      "description": "Basic TRUST_ACCEPT with device name",
+      "msg_type": 2,
+      "service": "trust",
+      "payload": {
+        "device_name": "rDeck"
+      },
+      "payload_msgpack_hex": "81ab6465766963655f6e616d65a5724465636b"
+    },
+    "trust_accept_long_name": {
+      "description": "TRUST_ACCEPT with longer device name",
+      "msg_type": 2,
+      "service": "trust",
+      "payload": {
+        "device_name": "My Personal rDeck Device"
+      },
+      "payload_msgpack_hex": "81ab6465766963655f6e616d65b84d7920506572736f6e616c20724465636b20446576696365"
+    },
+    "ntp_request_basic": {
+      "description": "NTP request with client timestamp",
+      "msg_type": 16,
+      "service": "ntp",
+      "payload": {
+        "client_timestamp": 1234567890
+      },
+      "payload_msgpack_hex": "81b0636c69656e745f74696d657374616d70ce499602d2"
+    },
+    "ntp_request_zero": {
+      "description": "NTP request with zero timestamp",
+      "msg_type": 16,
+      "service": "ntp",
+      "payload": {
+        "client_timestamp": 0
+      },
+      "payload_msgpack_hex": "81b0636c69656e745f74696d657374616d7000"
+    },
+    "ntp_request_max_32bit": {
+      "description": "NTP request with max 32-bit timestamp",
+      "msg_type": 16,
+      "service": "ntp",
+      "payload": {
+        "client_timestamp": 4294967295
+      },
+      "payload_msgpack_hex": "81b0636c69656e745f74696d657374616d70ceffffffff"
+    },
+    "ntp_response_basic": {
+      "description": "NTP response with both timestamps",
+      "msg_type": 17,
+      "service": "ntp",
+      "payload": {
+        "server_timestamp": 1706825600,
+        "client_timestamp": 1000
+      },
+      "payload_msgpack_hex": "82b07365727665725f74696d657374616d70ce65bc1780b0636c69656e745f74696d657374616d70cd03e8"
+    },
+    "ntp_response_recent": {
+      "description": "NTP response with recent epoch time",
+      "msg_type": 17,
+      "service": "ntp",
+      "payload": {
+        "server_timestamp": 1700000000,
+        "client_timestamp": 50000
+      },
+      "payload_msgpack_hex": "82b07365727665725f74696d657374616d70ce6553f100b0636c69656e745f74696d657374616d70cdc350"
+    },
+    "search_request_basic": {
+      "description": "Search request with query and default max_results",
+      "msg_type": 32,
+      "service": "search",
+      "payload": {
+        "query": "test query",
+        "max_results": 5
+      },
+      "payload_msgpack_hex": "82a57175657279aa74657374207175657279ab6d61785f726573756c747305"
+    },
+    "search_request_custom_max": {
+      "description": "Search request with custom max_results",
+      "msg_type": 32,
+      "service": "search",
+      "payload": {
+        "query": "python programming",
+        "max_results": 10
+      },
+      "payload_msgpack_hex": "82a57175657279b2707974686f6e2070726f6772616d6d696e67ab6d61785f726573756c74730a"
+    },
+    "search_response_with_results": {
+      "description": "Search response with two results",
+      "msg_type": 33,
+      "service": "search",
+      "payload": {
+        "query": "test",
+        "results": [
+          {"title": "Result 1", "url": "https://example.com/1", "snippet": "First result"},
+          {"title": "Result 2", "url": "https://example.com/2", "snippet": "Second result"}
+        ],
+        "error": null
+      },
+      "payload_msgpack_hex": "83a57175657279a474657374a7726573756c74739283a57469746c65a8526573756c742031a375726cb568747470733a2f2f6578616d706c652e636f6d2f31a7736e6970706574ac466972737420726573756c7483a57469746c65a8526573756c742032a375726cb568747470733a2f2f6578616d706c652e636f6d2f32a7736e6970706574ad5365636f6e6420726573756c74a56572726f72c0"
+    },
+    "search_response_empty": {
+      "description": "Search response with no results",
+      "msg_type": 33,
+      "service": "search",
+      "payload": {
+        "query": "no results query",
+        "results": [],
+        "error": null
+      },
+      "payload_msgpack_hex": "83a57175657279b06e6f20726573756c7473207175657279a7726573756c747390a56572726f72c0"
+    },
+    "search_response_with_error": {
+      "description": "Search response with error",
+      "msg_type": 33,
+      "service": "search",
+      "payload": {
+        "query": "failed query",
+        "results": [],
+        "error": "Network timeout"
+      },
+      "payload_msgpack_hex": "83a57175657279ac6661696c6564207175657279a7726573756c747390a56572726f72af4e6574776f726b2074696d656f7574"
+    }
+  }
+}

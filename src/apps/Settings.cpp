@@ -1,5 +1,8 @@
 #include "Settings.h"
 #include "retOS/retosUtils/timezones.h"
+#include "services/RnsUtils/TrustedServers.h"
+#include "services/RnsService.h"
+#include "services/TimeService.h"
 
 static JsonDocument _root_settings;
 
@@ -20,23 +23,26 @@ static JsonDocument _root_settings;
 }
 
 /*virtual */ void Settings::stop() {
-     // apply our local settiing
-     JsonString timezone_val = _settings[timezone];
-     time_t epoch_val = _settings[epoch];
-     _retos->time.setPosixTimezone(timezone_val.c_str());
-     if(epoch_val > 0) {
-         _retos->time.setTime(epoch_val);
-     }
-    
+    // apply our local settings (with null checks to avoid crashes)
+    JsonString timezone_val = _settings[timezone];
+    time_t epoch_val = _settings[epoch];
 
-     // apply the settings registered by services
-     for(auto sInfo: _retos->serviceInfo()) {
+    if (!timezone_val.isNull()) {
+        _retos->time.setPosixTimezone(timezone_val.c_str());
+    }
+
+    if (epoch_val > 0) {
+        _retos->time.setTime(epoch_val);
+    }
+
+    // apply the settings registered by services
+    for (auto sInfo: _retos->serviceInfo()) {
         sInfo.applySettings();
     }
 
     // save and clear settings since JSON changes lead to garbage memleak
     Settings::saveSettings();
-    _root_settings.clear();   
+    _root_settings.clear();
 }
  
 
@@ -104,15 +110,20 @@ void Settings::drawScreen() {
     lv_obj_set_flex_flow(settings_column, LV_FLEX_FLOW_ROW_WRAP);
     lv_obj_set_style_pad_left(settings_column, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_pad_right(settings_column, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-    // date & time
 
+    // date & time
     drawTimeDateSection();
+
+    // Trusted servers section
+    drawTrustedServersSection();
+
+    // Device identity section (regenerate identity button)
+    drawDeviceIdentitySection();
 
     // draw any section added by services
     for(auto sInfo: _retos->serviceInfo()) {
         sInfo.drawSettings(settings_column, this);
     }
-
 }
 
 void functor_callback(lv_event_t * e) {
@@ -213,5 +224,258 @@ void Settings::drawTimeDateSection() {
     // lv_obj_center(btn_label);
 
 
-    
+}
+
+// Callback data for trust accept/revoke buttons
+struct TrustButtonData {
+    std::string hashHex;
+    Settings* settings;
+};
+
+static void trustAcceptCallback(lv_event_t* e) {
+    TrustButtonData* data = (TrustButtonData*)lv_event_get_user_data(e);
+    if (data) {
+        Serial.printf("[Settings] Accepting trust for %s\n", data->hashHex.c_str());
+
+        // Accept the trust offer
+        if (Retcon::Service::getTrustedServers().acceptOffer(data->hashHex)) {
+            // Send TRUST_ACCEPT message
+            RNS::Bytes serverHash;
+            serverHash.assignHex(data->hashHex.c_str());
+
+            RnsService* rns = retOsGlobalPtr->fetchService<RnsService>();
+            if (rns) {
+                rns->sendTrustAccept(serverHash);
+            }
+
+            // If server offers NTP, request time sync via TimeService
+            auto server = Retcon::Service::getTrustedServers().getServer(data->hashHex);
+            if (server) {
+                for (const auto& svc : server->services) {
+                    if (svc == "ntp") {
+                        Serial.println("[Settings] Server offers NTP, requesting time sync...");
+                        TimeService* timeSvc = retOsGlobalPtr->fetchService<TimeService>();
+                        if (timeSvc) {
+                            timeSvc->requestNtpSync();
+                        }
+                        break;
+                    }
+                }
+            }
+
+            // Redraw the section to show updated state
+            data->settings->redrawTrustedServersSection();
+        }
+    }
+}
+
+static void trustRevokeCallback(lv_event_t* e) {
+    TrustButtonData* data = (TrustButtonData*)lv_event_get_user_data(e);
+    if (data) {
+        Serial.printf("[Settings] Revoking trust for %s\n", data->hashHex.c_str());
+        Retcon::Service::getTrustedServers().revokeTrust(data->hashHex);
+
+        // Redraw the section
+        data->settings->redrawTrustedServersSection();
+    }
+}
+
+void Settings::drawTrustedServersSection() {
+    drawSettingsSectionHeader(settings_column, "Trusted Servers");
+
+    auto& trustedServers = Retcon::Service::getTrustedServers();
+    auto pending = trustedServers.getPendingOffers();
+    auto trusted = trustedServers.getTrustedServers();
+
+    if (pending.empty() && trusted.empty()) {
+        lv_obj_t* emptyLabel = lv_label_create(settings_column);
+        lv_label_set_text(emptyLabel, "No server connections yet.");
+        lv_obj_set_size(emptyLabel, LV_PCT(100), LV_SIZE_CONTENT);
+        lv_obj_add_flag(emptyLabel, LV_OBJ_FLAG_FLEX_IN_NEW_TRACK);
+        lv_obj_set_style_text_color(emptyLabel, retOsGlobalPtr->ui()->fg_color(), LV_PART_MAIN);
+        return;
+    }
+
+    // Draw pending offers
+    if (!pending.empty()) {
+        lv_obj_t* pendingLabel = lv_label_create(settings_column);
+        lv_label_set_text(pendingLabel, LV_SYMBOL_BELL " Pending Offers:");
+        lv_obj_set_size(pendingLabel, LV_PCT(100), LV_SIZE_CONTENT);
+        lv_obj_add_flag(pendingLabel, LV_OBJ_FLAG_FLEX_IN_NEW_TRACK);
+        lv_obj_set_style_pad_top(pendingLabel, 5, LV_PART_MAIN);
+        lv_obj_set_style_text_color(pendingLabel, retOsGlobalPtr->ui()->fg_color(), LV_PART_MAIN);
+
+        for (const auto& server : pending) {
+            drawTrustedServerRow(server, true);
+        }
+    }
+
+    // Draw trusted servers
+    if (!trusted.empty()) {
+        lv_obj_t* trustedLabel = lv_label_create(settings_column);
+        lv_label_set_text(trustedLabel, LV_SYMBOL_OK " Trusted:");
+        lv_obj_set_size(trustedLabel, LV_PCT(100), LV_SIZE_CONTENT);
+        lv_obj_add_flag(trustedLabel, LV_OBJ_FLAG_FLEX_IN_NEW_TRACK);
+        lv_obj_set_style_pad_top(trustedLabel, 5, LV_PART_MAIN);
+        lv_obj_set_style_text_color(trustedLabel, retOsGlobalPtr->ui()->fg_color(), LV_PART_MAIN);
+
+        for (const auto& server : trusted) {
+            drawTrustedServerRow(server, false);
+        }
+    }
+}
+
+void Settings::drawTrustedServerRow(const Retcon::Service::TrustedServer& server, bool isPending) {
+    // Name label - takes most of the width
+    lv_obj_t* nameLabel = lv_label_create(settings_column);
+    lv_label_set_text(nameLabel, server.name.c_str());
+    lv_obj_set_size(nameLabel, LV_PCT(55), LV_SIZE_CONTENT);
+    lv_obj_add_flag(nameLabel, LV_OBJ_FLAG_FLEX_IN_NEW_TRACK);
+    lv_obj_set_style_pad_top(nameLabel, 5, LV_PART_MAIN);
+    lv_obj_set_style_text_color(nameLabel, retOsGlobalPtr->ui()->fg_color(), LV_PART_MAIN);
+
+    // Button (Accept or Revoke) - e-paper compatible styling, larger size
+    lv_obj_t* btn = lv_btn_create(settings_column);
+    lv_obj_set_size(btn, LV_PCT(40), 35);
+    lv_obj_set_style_border_width(btn, 2, LV_PART_MAIN);
+    lv_obj_set_style_border_color(btn, retOsGlobalPtr->ui()->fg_color(), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(btn, retOsGlobalPtr->ui()->bg_color(), LV_PART_MAIN);
+    lv_obj_set_style_pad_all(btn, 5, LV_PART_MAIN);
+
+    lv_obj_t* btnLabel = lv_label_create(btn);
+    lv_label_set_text(btnLabel, isPending ? LV_SYMBOL_OK " Accept" : LV_SYMBOL_CLOSE " Revoke");
+    lv_obj_set_style_text_color(btnLabel, retOsGlobalPtr->ui()->fg_color(), LV_PART_MAIN);
+    lv_obj_center(btnLabel);
+
+    // Store button data - use static storage to persist past function call
+    static std::vector<TrustButtonData> buttonDataStorage;
+    buttonDataStorage.push_back({server.hashHex(), this});
+    TrustButtonData* data = &buttonDataStorage.back();
+
+    if (isPending) {
+        lv_obj_add_event_cb(btn, trustAcceptCallback, LV_EVENT_CLICKED, data);
+    } else {
+        lv_obj_add_event_cb(btn, trustRevokeCallback, LV_EVENT_CLICKED, data);
+    }
+}
+
+// Async callback to redraw after event processing completes
+static void asyncRedrawCallback(void* settings_ptr) {
+    Settings* settings = (Settings*)settings_ptr;
+    if (settings) {
+        settings->doRedrawTrustedServersSection();
+    }
+}
+
+void Settings::redrawTrustedServersSection() {
+    // Defer redraw to avoid destroying objects while their event callbacks are running
+    // This prevents use-after-free when the button that triggered the event is deleted
+    lv_async_call(asyncRedrawCallback, this);
+}
+
+void Settings::doRedrawTrustedServersSection() {
+    // Simple approach: just redraw the entire screen
+    // A more sophisticated approach would track the section container and only redraw that
+    lv_obj_clean(screen);
+    drawScreen();
+}
+
+// Callback data for identity regeneration button
+struct IdentityButtonData {
+    Settings* settings;
+    bool confirmPending;  // Simple "press twice" confirmation
+};
+
+static IdentityButtonData identityBtnData = {nullptr, false};
+
+static void identityRegenCallback(lv_event_t* e) {
+    IdentityButtonData* data = (IdentityButtonData*)lv_event_get_user_data(e);
+    if (!data) return;
+
+    lv_obj_t* btn = lv_event_get_target(e);
+    lv_obj_t* label = lv_obj_get_child(btn, 0);
+
+    if (!data->confirmPending) {
+        // First press - ask for confirmation
+        data->confirmPending = true;
+        if (label) {
+            lv_label_set_text(label, LV_SYMBOL_WARNING " Press again to confirm");
+        }
+        Serial.println("[Settings] Identity regeneration: waiting for confirmation");
+        return;
+    }
+
+    // Second press - perform the reset
+    Serial.println("[Settings] Regenerating identity...");
+
+    FS* fs = retOsGlobalPtr->hal().fs;
+
+    // Delete identity file
+    if (fs->exists("/reticulum/identity.priv")) {
+        fs->remove("/reticulum/identity.priv");
+        Serial.println("[Settings] Deleted identity.priv");
+    }
+
+    // Delete user info (full reset)
+    if (fs->exists("/reticulum/userinfo.json")) {
+        fs->remove("/reticulum/userinfo.json");
+        Serial.println("[Settings] Deleted userinfo.json");
+    }
+
+    // Delete trusted servers (will be orphaned with new identity)
+    if (fs->exists("/trusted_servers.json")) {
+        fs->remove("/trusted_servers.json");
+        Serial.println("[Settings] Deleted trusted_servers.json");
+    }
+
+    // Update button to show restarting
+    if (label) {
+        lv_label_set_text(label, LV_SYMBOL_REFRESH " Restarting...");
+    }
+
+    // Small delay so user sees the message
+    delay(500);
+
+    // Restart to regenerate identity
+#ifdef ESP_PLATFORM
+    ESP.restart();
+#else
+    Serial.println("[Settings] Emulator: Would restart here. Please restart manually.");
+    // Reset state for emulator
+    data->confirmPending = false;
+    if (label) {
+        lv_label_set_text(label, LV_SYMBOL_WARNING " Regenerate Identity");
+    }
+#endif
+}
+
+void Settings::drawDeviceIdentitySection() {
+    drawSettingsSectionHeader(settings_column, "Device Identity");
+
+    // Warning label
+    lv_obj_t* warnLabel = lv_label_create(settings_column);
+    lv_label_set_text(warnLabel, "This will delete your identity and\nall trusted server connections.");
+    lv_obj_set_size(warnLabel, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_add_flag(warnLabel, LV_OBJ_FLAG_FLEX_IN_NEW_TRACK);
+    lv_obj_set_style_text_color(warnLabel, retOsGlobalPtr->ui()->fg_color(), LV_PART_MAIN);
+    lv_obj_set_style_pad_top(warnLabel, 3, LV_PART_MAIN);
+
+    // Regenerate button - e-paper compatible styling
+    lv_obj_t* btn = lv_btn_create(settings_column);
+    lv_obj_set_size(btn, LV_PCT(80), LV_SIZE_CONTENT);
+    lv_obj_add_flag(btn, LV_OBJ_FLAG_FLEX_IN_NEW_TRACK);
+    lv_obj_set_style_pad_all(btn, 8, LV_PART_MAIN);
+    lv_obj_set_style_border_width(btn, 2, LV_PART_MAIN);
+    lv_obj_set_style_border_color(btn, retOsGlobalPtr->ui()->fg_color(), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(btn, retOsGlobalPtr->ui()->bg_color(), LV_PART_MAIN);
+
+    lv_obj_t* btnLabel = lv_label_create(btn);
+    lv_label_set_text(btnLabel, LV_SYMBOL_WARNING " Regenerate Identity");
+    lv_obj_set_style_text_color(btnLabel, retOsGlobalPtr->ui()->fg_color(), LV_PART_MAIN);
+    lv_obj_center(btnLabel);
+
+    // Set up callback data
+    identityBtnData.settings = this;
+    identityBtnData.confirmPending = false;
+    lv_obj_add_event_cb(btn, identityRegenCallback, LV_EVENT_CLICKED, &identityBtnData);
 }

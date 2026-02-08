@@ -2,6 +2,10 @@
 #include "BaseApp.h"
 #include "ArduinoJson.h"
 
+// Forward declarations
+namespace Retcon::Service {
+    struct TrustedServer;
+}
 
 typedef std::function<void(lv_event_t *)> FunctorCallback;
 
@@ -28,6 +32,10 @@ class Settings : public BaseApp {
         lv_obj_t* drawSettingsTextInputRow(lv_obj_t* container, const char* title, const char* value, FunctorCallback *callback);
         static void drawSettingsSectionHeader(lv_obj_t* container, const char* title);
 
+        // Redraw trusted servers section (called after accept/revoke)
+        void redrawTrustedServersSection();
+        void doRedrawTrustedServersSection();  // Actually performs the redraw (called async)
+
     protected:
         lv_obj_t * settings_column;
 
@@ -35,6 +43,8 @@ class Settings : public BaseApp {
 
         void drawScreen();
         void drawTimeDateSection();
-
+        void drawTrustedServersSection();
+        void drawTrustedServerRow(const Retcon::Service::TrustedServer& server, bool isPending);
+        void drawDeviceIdentitySection();
 
 };
