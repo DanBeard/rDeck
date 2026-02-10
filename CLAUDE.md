@@ -157,11 +157,14 @@ companion-server/
 
 ### Running
 
+Both modes use `~/.companion-server/` for identity, trust, and config by default. Override with `--data-dir` or `COMPANION_DATA_DIR` env var.
+
 **With maps (Docker):**
 ```bash
 cd companion-server/docker
-./setup.sh    # One-time: pick region, download data, generate tiles
-./run.sh      # Start tileserver + Valhalla + Nominatim + companion server TUI
+./setup.sh              # One-time: pick region, download data, generate tiles
+./run.sh                # Start Docker services + companion server TUI with maps
+./run.sh --headless -v  # Headless mode (no TUI) with verbose logging
 ```
 
 **Without maps:**
@@ -170,7 +173,10 @@ cd companion-server
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e .
-python -m companion_server
+python -m companion_server                  # TUI mode, no maps
+python -m companion_server --headless       # Headless mode
+python -m companion_server --with-maps      # Enable maps with default Docker URLs
+python -m companion_server --tcp-port 4242  # Generate Reticulum TCP config
 ```
 
 ## Service Protocol

@@ -1,13 +1,19 @@
 #include "Maps.h"
 #include "services/RnsService.h"
+#include "services/PositionService.h"
 #include "services/RnsUtils/TrustedServers.h"
 #include "lvgl.h"
 #include <cmath>
+#include <algorithm>
 
 // Keyboard input handling
 static void mapKeyCallback(lv_event_t* e);
 static void searchInputCallback(lv_event_t* e);
 static void searchResultCallback(lv_event_t* e);
+static void zoomInCallback(lv_event_t* e);
+static void zoomOutCallback(lv_event_t* e);
+static void searchBtnCallback(lv_event_t* e);
+static void searchRetryCallback(lv_event_t* e);
 
 // TileKey comparison operators
 bool Maps::TileKey::operator<(const TileKey& other) const {
@@ -24,6 +30,20 @@ void Maps::start(RetOS* retos) {
     _keep_awake = true;
     drawUI();
 
+    // Query PositionService for initial center
+    PositionService* pos = _retos->fetchService<PositionService>();
+    if (pos && pos->hasValidPosition()) {
+        _centerLat = pos->getLatitude();
+        _centerLon = pos->getLongitude();
+        _gpsLat = _centerLat;
+        _gpsLon = _centerLon;
+        _hasGps = true;
+        if (pos->hasValidHeading()) {
+            _gpsHeading = pos->getHeading();
+            _hasHeading = true;
+        }
+    }
+
     // Check if RnsService is available and fully initialized
     RnsService* rns = _retos->fetchService<RnsService>();
     if (!rns || rns->status() != RUNNING) {
@@ -37,7 +57,10 @@ void Maps::start(RetOS* retos) {
         showError("No trusted maps server found.\nAdd one in Settings > Trusted Servers.");
     }
 
-    // Request initial tiles (will no-op if no server)
+    // Render any cached tiles immediately
+    renderMap();
+
+    // Request any missing tiles from server
     requestVisibleTiles();
 }
 
@@ -78,6 +101,18 @@ void Maps::tick(const unsigned long tickMillis) {
         requestVisibleTiles();
         _lastTileRequest = tickMillis;
     }
+
+    // Check search timeout
+    if (_searchPending) {
+        unsigned long elapsed = tickMillis - _searchStartTime;
+        if (elapsed >= SEARCH_TIMEOUT_MS) {
+            displaySearchTimeout();
+        } else if (elapsed >= 5000) {
+            // Show elapsed time after 5 seconds
+            lv_label_set_text_fmt(_search_status_label, "Searching... (%lus)", elapsed / 1000);
+            lv_obj_clear_flag(_search_status_label, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
 }
 
 void Maps::stop() {
@@ -86,6 +121,9 @@ void Maps::stop() {
     _pendingTileRequests.clear();
     _routePoints.clear();
     _searchResults.clear();
+    _hasSearchPin = false;
+    _searchPinName.clear();
+    _searchPending = false;
 }
 
 void Maps::drawUI() {
@@ -105,9 +143,12 @@ void Maps::drawUI() {
     lv_canvas_set_buffer(_map_canvas, cbuf, CANVAS_WIDTH, CANVAS_HEIGHT, LV_IMG_CF_INDEXED_1BIT);
     lv_obj_align(_map_canvas, LV_ALIGN_TOP_LEFT, 0, 0);
 
-    // Set palette for 1-bit canvas (0=white, 1=black)
-    lv_canvas_set_palette(_map_canvas, 0, lv_color_white());
-    lv_canvas_set_palette(_map_canvas, 1, lv_color_black());
+    // Set palette for 1-bit canvas
+    // LVGL indexed 1-bit uses c.full & 0x1 as the palette index:
+    //   lv_color_black().full = 0 → bit 0 → palette[0]
+    //   lv_color_white().full != 0 → bit 1 → palette[1]
+    lv_canvas_set_palette(_map_canvas, 0, lv_color_black());
+    lv_canvas_set_palette(_map_canvas, 1, lv_color_white());
 
     // Clear canvas to white
     clearCanvas();
@@ -124,6 +165,11 @@ void Maps::drawUI() {
     _zoom_label = lv_label_create(_status_bar);
     lv_label_set_text_fmt(_zoom_label, "Z%d", _zoom);
     lv_obj_set_style_text_font(_zoom_label, &lv_font_montserrat_14, LV_PART_MAIN);
+
+    _search_hint_label = lv_label_create(_status_bar);
+    lv_label_set_text(_search_hint_label, "/ Srch");
+    lv_obj_set_style_text_font(_search_hint_label, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_set_style_text_color(_search_hint_label, lv_color_hex(0x555555), LV_PART_MAIN);
 
     _coords_label = lv_label_create(_status_bar);
     lv_label_set_text_fmt(_coords_label, "%.4f, %.4f", _centerLat, _centerLon);
@@ -166,6 +212,78 @@ void Maps::drawUI() {
     _search_results_list = lv_list_create(_search_overlay);
     lv_obj_set_size(_search_results_list, LV_PCT(100), LV_PCT(100));
     lv_obj_set_flex_grow(_search_results_list, 1);
+
+    // Search status label (below results list)
+    _search_status_label = lv_label_create(_search_overlay);
+    lv_obj_set_width(_search_status_label, LV_PCT(100));
+    lv_obj_set_style_text_font(_search_status_label, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_set_style_text_color(_search_status_label, lv_color_hex(0x666666), LV_PART_MAIN);
+    lv_label_set_text(_search_status_label, "");
+    lv_obj_add_flag(_search_status_label, LV_OBJ_FLAG_HIDDEN);
+
+    // Search retry button (hidden by default)
+    _search_retry_btn = lv_btn_create(_search_overlay);
+    lv_obj_set_size(_search_retry_btn, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_color(_search_retry_btn, lv_color_white(), LV_PART_MAIN);
+    lv_obj_set_style_border_color(_search_retry_btn, lv_color_black(), LV_PART_MAIN);
+    lv_obj_set_style_border_width(_search_retry_btn, 1, LV_PART_MAIN);
+    lv_obj_set_style_shadow_width(_search_retry_btn, 0, LV_PART_MAIN);
+    lv_obj_add_event_cb(_search_retry_btn, searchRetryCallback, LV_EVENT_CLICKED, this);
+    lv_obj_t* retry_label = lv_label_create(_search_retry_btn);
+    lv_label_set_text(retry_label, LV_SYMBOL_REFRESH " Retry");
+    lv_obj_set_style_text_color(retry_label, lv_color_black(), LV_PART_MAIN);
+    lv_obj_center(retry_label);
+    lv_obj_add_flag(_search_retry_btn, LV_OBJ_FLAG_HIDDEN);
+
+    // Zoom buttons (overlaid on map, not on canvas)
+    _zoom_in_btn = lv_btn_create(main);
+    lv_obj_set_size(_zoom_in_btn, 36, 36);
+    lv_obj_align(_zoom_in_btn, LV_ALIGN_BOTTOM_RIGHT, -6, -66);  // Above zoom-out and status bar
+    lv_obj_set_style_bg_color(_zoom_in_btn, lv_color_white(), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(_zoom_in_btn, LV_OPA_100, LV_PART_MAIN);
+    lv_obj_set_style_border_color(_zoom_in_btn, lv_color_black(), LV_PART_MAIN);
+    lv_obj_set_style_border_width(_zoom_in_btn, 2, LV_PART_MAIN);
+    lv_obj_set_style_shadow_width(_zoom_in_btn, 0, LV_PART_MAIN);
+    lv_obj_set_style_radius(_zoom_in_btn, 4, LV_PART_MAIN);
+    lv_obj_add_event_cb(_zoom_in_btn, zoomInCallback, LV_EVENT_CLICKED, this);
+    lv_obj_t* plus_label = lv_label_create(_zoom_in_btn);
+    lv_label_set_text(plus_label, "+");
+    lv_obj_set_style_text_font(plus_label, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_set_style_text_color(plus_label, lv_color_black(), LV_PART_MAIN);
+    lv_obj_center(plus_label);
+
+    _zoom_out_btn = lv_btn_create(main);
+    lv_obj_set_size(_zoom_out_btn, 36, 36);
+    lv_obj_align_to(_zoom_out_btn, _zoom_in_btn, LV_ALIGN_OUT_BOTTOM_MID, 0, 4);
+    lv_obj_set_style_bg_color(_zoom_out_btn, lv_color_white(), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(_zoom_out_btn, LV_OPA_100, LV_PART_MAIN);
+    lv_obj_set_style_border_color(_zoom_out_btn, lv_color_black(), LV_PART_MAIN);
+    lv_obj_set_style_border_width(_zoom_out_btn, 2, LV_PART_MAIN);
+    lv_obj_set_style_shadow_width(_zoom_out_btn, 0, LV_PART_MAIN);
+    lv_obj_set_style_radius(_zoom_out_btn, 4, LV_PART_MAIN);
+    lv_obj_add_event_cb(_zoom_out_btn, zoomOutCallback, LV_EVENT_CLICKED, this);
+    lv_obj_t* minus_label = lv_label_create(_zoom_out_btn);
+    lv_label_set_text(minus_label, LV_SYMBOL_MINUS);
+    lv_obj_set_style_text_font(minus_label, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_set_style_text_color(minus_label, lv_color_black(), LV_PART_MAIN);
+    lv_obj_center(minus_label);
+
+    // Search button (above zoom buttons)
+    _search_btn = lv_btn_create(main);
+    lv_obj_set_size(_search_btn, 36, 36);
+    lv_obj_align_to(_search_btn, _zoom_in_btn, LV_ALIGN_OUT_TOP_MID, 0, -4);
+    lv_obj_set_style_bg_color(_search_btn, lv_color_white(), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(_search_btn, LV_OPA_100, LV_PART_MAIN);
+    lv_obj_set_style_border_color(_search_btn, lv_color_black(), LV_PART_MAIN);
+    lv_obj_set_style_border_width(_search_btn, 2, LV_PART_MAIN);
+    lv_obj_set_style_shadow_width(_search_btn, 0, LV_PART_MAIN);
+    lv_obj_set_style_radius(_search_btn, 4, LV_PART_MAIN);
+    lv_obj_add_event_cb(_search_btn, searchBtnCallback, LV_EVENT_CLICKED, this);
+    lv_obj_t* search_icon = lv_label_create(_search_btn);
+    lv_label_set_text(search_icon, LV_SYMBOL_EYE_OPEN);
+    lv_obj_set_style_text_font(search_icon, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_set_style_text_color(search_icon, lv_color_black(), LV_PART_MAIN);
+    lv_obj_center(search_icon);
 
     // Register keyboard handler for the main screen
     lv_obj_add_event_cb(main, mapKeyCallback, LV_EVENT_KEY, this);
@@ -248,10 +366,31 @@ static void searchResultCallback(lv_event_t* e) {
 
     auto& results = app->getSearchResults();
     if (idx < results.size()) {
+        app->setSearchPinName(results[idx].display_name);
         app->goToLocation(results[idx].lat, results[idx].lon);
         lv_obj_add_flag(app->getSearchOverlay(), LV_OBJ_FLAG_HIDDEN);
         app->searchMode() = false;
     }
+}
+
+static void zoomInCallback(lv_event_t* e) {
+    Maps* app = (Maps*)lv_event_get_user_data(e);
+    if (app) app->zoom(1);
+}
+
+static void zoomOutCallback(lv_event_t* e) {
+    Maps* app = (Maps*)lv_event_get_user_data(e);
+    if (app) app->zoom(-1);
+}
+
+static void searchBtnCallback(lv_event_t* e) {
+    Maps* app = (Maps*)lv_event_get_user_data(e);
+    if (app) app->startSearch();
+}
+
+static void searchRetryCallback(lv_event_t* e) {
+    Maps* app = (Maps*)lv_event_get_user_data(e);
+    if (app) app->retrySearch();
 }
 
 void Maps::showError(const char* msg) {
@@ -332,6 +471,11 @@ void Maps::renderMap() {
         drawGpsMarker();
     }
 
+    // Draw search pin marker if we have one
+    if (_hasSearchPin) {
+        drawSearchPin();
+    }
+
     // Draw route if we have one
     if (_hasRoute && _routePoints.size() >= 4) {
         // TODO: Draw route polyline
@@ -360,14 +504,14 @@ void Maps::drawTile(int screenX, int screenY, const std::vector<uint8_t>& tileDa
             int cx = screenX + tx;
             if (cx < 0 || cx >= CANVAS_WIDTH) continue;
 
-            // Get pixel from packed bit data
+            // Get pixel from packed bit data (1=white, 0=black per Python convention)
             int bitIndex = ty * TILE_SIZE + tx;
             int byteIndex = bitIndex / 8;
             int bitOffset = 7 - (bitIndex % 8);  // MSB first
-            bool isBlack = (tileData[byteIndex] >> bitOffset) & 1;
+            bool isWhite = (tileData[byteIndex] >> bitOffset) & 1;
 
             // Set pixel on canvas
-            lv_color_t color = isBlack ? lv_color_black() : lv_color_white();
+            lv_color_t color = isWhite ? lv_color_white() : lv_color_black();
             lv_canvas_set_px_color(_map_canvas, cx, cy, color);
         }
     }
@@ -381,39 +525,157 @@ void Maps::drawGpsMarker() {
     int centerPixelX, centerPixelY;
     latLonToPixel(_centerLat, _centerLon, _zoom, centerPixelX, centerPixelY);
 
-    int screenX = (CANVAS_WIDTH / 2) + (gpsPixelX - centerPixelX);
-    int screenY = (CANVAS_HEIGHT / 2) + (gpsPixelY - centerPixelY);
+    int cx = (CANVAS_WIDTH / 2) + (gpsPixelX - centerPixelX);
+    int cy = (CANVAS_HEIGHT / 2) + (gpsPixelY - centerPixelY);
 
-    // Draw a small crosshair at GPS position
-    if (screenX >= 0 && screenX < CANVAS_WIDTH && screenY >= 0 && screenY < CANVAS_HEIGHT - 20) {
-        // Draw circle
-        lv_draw_rect_dsc_t rect_dsc;
-        lv_draw_rect_dsc_init(&rect_dsc);
-        rect_dsc.bg_color = lv_color_black();
-        rect_dsc.radius = 5;
+    // Check if marker is on-screen
+    if (cx < -10 || cx >= CANVAS_WIDTH + 10 || cy < -10 || cy >= CANVAS_HEIGHT - 10) return;
 
-        lv_area_t area = {
-            .x1 = (lv_coord_t)(screenX - 5),
-            .y1 = (lv_coord_t)(screenY - 5),
-            .x2 = (lv_coord_t)(screenX + 5),
-            .y2 = (lv_coord_t)(screenY + 5)
+    // Helper lambda to set a pixel with bounds checking
+    auto setpx = [&](int x, int y, lv_color_t c) {
+        if (x >= 0 && x < CANVAS_WIDTH && y >= 0 && y < CANVAS_HEIGHT - 20) {
+            lv_canvas_set_px_color(_map_canvas, x, y, c);
+        }
+    };
+
+    if (_hasHeading) {
+        // Draw heading arrow: filled triangle rotated by heading
+        // Triangle vertices relative to center: tip(0,-8), left-tail(-5,6), right-tail(5,6)
+        float rad = _gpsHeading * M_PI / 180.0f;
+        float cosA = cosf(rad);
+        float sinA = sinf(rad);
+
+        // Rotate vertices
+        struct Pt { float x, y; };
+        Pt verts[3] = {
+            { 0 * cosA - (-8) * sinA,  0 * sinA + (-8) * cosA },   // tip
+            { (-5) * cosA - 6 * sinA,  (-5) * sinA + 6 * cosA },   // left-tail
+            { 5 * cosA - 6 * sinA,     5 * sinA + 6 * cosA },      // right-tail
         };
 
-        // Simple crosshair since lv_canvas_draw_rect isn't available
-        for (int i = -4; i <= 4; i++) {
-            if (screenX + i >= 0 && screenX + i < CANVAS_WIDTH) {
-                lv_canvas_set_px_color(_map_canvas, screenX + i, screenY, lv_color_black());
+        // Scanline triangle fill: sort vertices by Y
+        Pt sorted[3] = { verts[0], verts[1], verts[2] };
+        if (sorted[0].y > sorted[1].y) std::swap(sorted[0], sorted[1]);
+        if (sorted[1].y > sorted[2].y) std::swap(sorted[1], sorted[2]);
+        if (sorted[0].y > sorted[1].y) std::swap(sorted[0], sorted[1]);
+
+        int yMin = (int)floorf(sorted[0].y);
+        int yMid = (int)floorf(sorted[1].y);
+        int yMax = (int)ceilf(sorted[2].y);
+
+        for (int sy = yMin; sy <= yMax; sy++) {
+            float t = (float)sy;
+            float xLeft, xRight;
+
+            // Interpolate X along edges
+            auto interpX = [](Pt a, Pt b, float y) -> float {
+                if (fabsf(b.y - a.y) < 0.001f) return a.x;
+                return a.x + (b.x - a.x) * (y - a.y) / (b.y - a.y);
+            };
+
+            // Long edge: sorted[0] to sorted[2]
+            float xLong = interpX(sorted[0], sorted[2], t);
+
+            if (sy <= yMid) {
+                // Top half: sorted[0] to sorted[1]
+                float xShort = interpX(sorted[0], sorted[1], t);
+                xLeft = fminf(xLong, xShort);
+                xRight = fmaxf(xLong, xShort);
+            } else {
+                // Bottom half: sorted[1] to sorted[2]
+                float xShort = interpX(sorted[1], sorted[2], t);
+                xLeft = fminf(xLong, xShort);
+                xRight = fmaxf(xLong, xShort);
             }
-            if (screenY + i >= 0 && screenY + i < CANVAS_HEIGHT - 20) {
-                lv_canvas_set_px_color(_map_canvas, screenX, screenY + i, lv_color_black());
+
+            for (int sx = (int)floorf(xLeft); sx <= (int)ceilf(xRight); sx++) {
+                setpx(cx + sx, cy + sy, lv_color_black());
+            }
+        }
+
+        // White center pixel for contrast
+        setpx(cx, cy, lv_color_white());
+    } else {
+        // No heading: draw filled circle (radius 4) with white center
+        const int R = 4;
+        for (int dy = -R; dy <= R; dy++) {
+            for (int dx = -R; dx <= R; dx++) {
+                if (dx * dx + dy * dy <= R * R) {
+                    setpx(cx + dx, cy + dy, lv_color_black());
+                }
+            }
+        }
+        // White center dot
+        setpx(cx, cy, lv_color_white());
+        setpx(cx - 1, cy, lv_color_white());
+        setpx(cx + 1, cy, lv_color_white());
+        setpx(cx, cy - 1, lv_color_white());
+        setpx(cx, cy + 1, lv_color_white());
+    }
+}
+
+void Maps::drawSearchPin() {
+    // Calculate screen position of the pin
+    int pinPixelX, pinPixelY;
+    latLonToPixel(_searchPinLat / 1e7, _searchPinLon / 1e7, _zoom, pinPixelX, pinPixelY);
+
+    int centerPixelX, centerPixelY;
+    latLonToPixel(_centerLat, _centerLon, _zoom, centerPixelX, centerPixelY);
+
+    int cx = (CANVAS_WIDTH / 2) + (pinPixelX - centerPixelX);
+    int cy = (CANVAS_HEIGHT / 2) + (pinPixelY - centerPixelY);
+
+    // Check if pin is on-screen
+    if (cx < -12 || cx >= CANVAS_WIDTH + 12 || cy < -12 || cy >= CANVAS_HEIGHT - 8) return;
+
+    // Helper lambda to set a pixel with bounds checking
+    auto setpx = [&](int x, int y, lv_color_t c) {
+        if (x >= 0 && x < CANVAS_WIDTH && y >= 0 && y < CANVAS_HEIGHT - 20) {
+            lv_canvas_set_px_color(_map_canvas, x, y, c);
+        }
+    };
+
+    // Draw hollow diamond shape (tip at bottom pointing at coordinate)
+    // Diamond: 11px tall, 11px wide at widest
+    // The tip (bottom vertex) is at the exact coordinate (cx, cy)
+    const int R = 5;  // half-size of diamond
+    for (int dy = -2 * R; dy <= 0; dy++) {
+        // Diamond width at this row
+        int halfW = (R * (2 * R + dy)) / (2 * R);  // narrows toward bottom
+        if (dy == 0) halfW = 0;  // tip is single pixel
+        for (int dx = -halfW; dx <= halfW; dx++) {
+            // Outline: draw only border pixels
+            bool isEdge = (dx == -halfW || dx == halfW ||
+                          dy == -2 * R || dy == 0);
+            if (isEdge) {
+                setpx(cx + dx, cy + dy, lv_color_black());
+            } else {
+                setpx(cx + dx, cy + dy, lv_color_white());
             }
         }
     }
+
+    // Black center dot
+    setpx(cx, cy - R, lv_color_black());
+    setpx(cx - 1, cy - R, lv_color_black());
+    setpx(cx + 1, cy - R, lv_color_black());
+    setpx(cx, cy - R - 1, lv_color_black());
+    setpx(cx, cy - R + 1, lv_color_black());
 }
 
 void Maps::drawStatusBar() {
     lv_label_set_text_fmt(_zoom_label, "Z%d%s", _zoom, _followGps ? " [F]" : "");
-    lv_label_set_text_fmt(_coords_label, "%.4f, %.4f", _centerLat, _centerLon);
+
+    if (_hasSearchPin && !_searchPinName.empty()) {
+        // Show truncated pin name instead of coordinates
+        std::string display = _searchPinName;
+        if (display.length() > 20) {
+            display = display.substr(0, 17) + "...";
+        }
+        lv_label_set_text(_coords_label, display.c_str());
+    } else {
+        lv_label_set_text_fmt(_coords_label, "%.4f, %.4f", _centerLat, _centerLon);
+    }
 }
 
 void Maps::requestTile(uint8_t z, uint32_t x, uint32_t y) {
@@ -638,9 +900,14 @@ void Maps::toggleFollowGps() {
 // Search
 void Maps::startSearch() {
     _searchMode = true;
+    _hasSearchPin = false;
+    _searchPinName.clear();
+    _searchPending = false;
     lv_obj_clear_flag(_search_overlay, LV_OBJ_FLAG_HIDDEN);
     lv_textarea_set_text(_search_input, "");
     lv_obj_clean(_search_results_list);
+    lv_obj_add_flag(_search_status_label, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(_search_retry_btn, LV_OBJ_FLAG_HIDDEN);
     lv_group_add_obj(_retos->ui()->default_input_group(), _search_input);
     lv_group_focus_obj(_search_input);
 }
@@ -652,6 +919,11 @@ void Maps::performSearch(const std::string& query) {
 
     RnsService* rns = _retos->fetchService<RnsService>();
     if (!rns || rns->status() != RUNNING) return;
+
+    // Track search state for timeout
+    _searchPending = true;
+    _searchStartTime = millis();
+    _lastSearchQuery = query;
 
     // Bias search near current map center
     int32_t biasLat = (int32_t)(_centerLat * 1e7);
@@ -666,19 +938,28 @@ void Maps::performSearch(const std::string& query) {
     // Show loading
     lv_obj_clean(_search_results_list);
     lv_list_add_text(_search_results_list, "Searching...");
+    lv_obj_add_flag(_search_retry_btn, LV_OBJ_FLAG_HIDDEN);
+    lv_label_set_text(_search_status_label, "");
+    lv_obj_clear_flag(_search_status_label, LV_OBJ_FLAG_HIDDEN);
 }
 
 void Maps::displaySearchResults(const Retcon::Service::MapGeocodeResponsePayload& response) {
+    _searchPending = false;
     lv_obj_clean(_search_results_list);
     _searchResults.clear();
+    lv_obj_add_flag(_search_retry_btn, LV_OBJ_FLAG_HIDDEN);
 
     if (!response.error.empty()) {
         lv_list_add_text(_search_results_list, response.error.c_str());
+        lv_label_set_text(_search_status_label, "Error from server");
+        lv_obj_clear_flag(_search_status_label, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(_search_retry_btn, LV_OBJ_FLAG_HIDDEN);
         return;
     }
 
     if (response.results.empty()) {
         lv_list_add_text(_search_results_list, "No results found");
+        lv_obj_add_flag(_search_status_label, LV_OBJ_FLAG_HIDDEN);
         return;
     }
 
@@ -697,12 +978,36 @@ void Maps::displaySearchResults(const Retcon::Service::MapGeocodeResponsePayload
         lv_obj_set_user_data(btn, (void*)(uintptr_t)i);
         lv_obj_add_event_cb(btn, searchResultCallback, LV_EVENT_CLICKED, this);
     }
+
+    lv_label_set_text_fmt(_search_status_label, "%d result(s)", (int)response.results.size());
+    lv_obj_clear_flag(_search_status_label, LV_OBJ_FLAG_HIDDEN);
+}
+
+void Maps::displaySearchTimeout() {
+    _searchPending = false;
+    lv_obj_clean(_search_results_list);
+    lv_list_add_text(_search_results_list, "Search timed out");
+    lv_label_set_text(_search_status_label, "No response from server");
+    lv_obj_clear_flag(_search_status_label, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(_search_retry_btn, LV_OBJ_FLAG_HIDDEN);
+}
+
+void Maps::retrySearch() {
+    if (!_lastSearchQuery.empty()) {
+        performSearch(_lastSearchQuery);
+    }
 }
 
 void Maps::goToLocation(int32_t lat, int32_t lon) {
     _centerLat = lat / 1e7;
     _centerLon = lon / 1e7;
     _followGps = false;
+
+    // Set search pin at this location
+    _hasSearchPin = true;
+    _searchPinLat = lat;
+    _searchPinLon = lon;
+
     renderMap();
     requestVisibleTiles();
 }
@@ -801,9 +1106,11 @@ EventStatus Maps::onEvent(const Event& event) {
 
         case EventType::LOCATION_CHANGE: {
             // Update GPS position
-            // The event args contain lat/lon as int32 * 1e7
+            // args[0] = lat*1e7, args[1] = lon*1e7, args[2] = heading*100, args[3] = heading valid
             _gpsLat = ((int32_t)event.args[0]) / 1e7;
             _gpsLon = ((int32_t)event.args[1]) / 1e7;
+            _gpsHeading = event.args[2] / 100.0f;
+            _hasHeading = (event.args[3] != 0);
             _hasGps = true;
 
             if (_followGps) {

@@ -19,7 +19,7 @@ forward_list<AppInfo> apps= {
 };
 
 forward_list<ServiceInfo> services = {
-     ServiceFactory<GPSService>(),
+     ServiceFactory<PositionService>(),
      ServiceFactory<WifiService>(),  // Must start before RnsService
      ServiceFactory<RnsService>(),
      ServiceFactory<TimeService>(),

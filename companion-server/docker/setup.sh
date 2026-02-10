@@ -246,6 +246,44 @@ copy_tileserver_config() {
     echo "Tileserver config written to $TILESERVER_DIR/"
 }
 
+clean_stale_container_data() {
+    # Check if region changed from a previous setup.
+    # Nominatim and Valhalla persist imported data — if the PBF changed,
+    # their data must be wiped so they re-import from the new PBF.
+    local env_file="$SCRIPT_DIR/.env"
+    local old_pbf=""
+
+    if [ -f "$env_file" ]; then
+        old_pbf=$(grep '^REGION_PBF_FILE=' "$env_file" 2>/dev/null | cut -d= -f2)
+    fi
+
+    if [ -n "$old_pbf" ] && [ "$old_pbf" != "$PBF_FILENAME" ]; then
+        echo ""
+        echo "Region changed: $old_pbf → $PBF_FILENAME"
+        echo "Clearing stale container data so services re-import from new PBF..."
+
+        # Stop containers if running (they hold locks on the data dirs)
+        if docker compose -f "$SCRIPT_DIR/docker-compose.yml" ps -q 2>/dev/null | grep -q .; then
+            echo "Stopping running containers..."
+            docker compose -f "$SCRIPT_DIR/docker-compose.yml" down 2>/dev/null || true
+        fi
+
+        if [ -d "$DATA_DIR/nominatim" ]; then
+            echo "  Clearing Nominatim data (will re-import on next start)..."
+            rm -rf "$DATA_DIR/nominatim"
+            mkdir -p "$DATA_DIR/nominatim"
+        fi
+
+        if [ -d "$DATA_DIR/valhalla" ]; then
+            echo "  Clearing Valhalla data (will rebuild routing graph on next start)..."
+            rm -rf "$DATA_DIR/valhalla"
+            mkdir -p "$DATA_DIR/valhalla"
+        fi
+
+        echo "  Done. All three services will use $PBF_FILENAME on next start."
+    fi
+}
+
 write_env() {
     local env_file="$SCRIPT_DIR/.env"
 
@@ -309,5 +347,6 @@ confirm_download
 download_pbf
 generate_mbtiles
 copy_tileserver_config
+clean_stale_container_data
 write_env
 print_summary

@@ -1,8 +1,9 @@
-#include "GPSService.h"
+#include "PositionService.h"
 #include "lvgl.h"
 #include "retOS/retosUtils/TimeHelper.h"
+#include "retOS/Events.h"
 
-void GPSService::start(RetOS* retos){
+void PositionService::start(RetOS* retos){
     _gps = retos->hal().gps;
     updateIcon(false);
 
@@ -10,8 +11,10 @@ void GPSService::start(RetOS* retos){
     _status = RUNNING;
 }
 
-void GPSService::tick(const unsigned long tMillis) {
+void PositionService::tick(const unsigned long tMillis) {
     _gps->tick();
+    if (!_gps->GPS) return;
+
     bool newIsValid = _gps->GPS->location.isValid();
     if(newIsValid != isValid){
         updateIcon(newIsValid);
@@ -64,9 +67,44 @@ void GPSService::tick(const unsigned long tMillis) {
             }
         }
     }
+
+    // Publish location events when GPS has a valid fix
+    if (_gps->GPS->location.isValid()) {
+        if (tMillis - _lastLocationPublish > LOCATION_PUBLISH_INTERVAL || tMillis < _lastLocationPublish) {
+            Event e;
+            e.src = this;
+            e.type = EventType::LOCATION_CHANGE;
+            e.args[0] = (uint32_t)(int32_t)(_gps->GPS->location.lat() * 1e7);
+            e.args[1] = (uint32_t)(int32_t)(_gps->GPS->location.lng() * 1e7);
+            e.args[2] = (uint32_t)(_gps->GPS->course.deg() * 100);  // heading with 0.01 resolution
+            e.args[3] = _gps->GPS->course.isValid() ? 1 : 0;
+            publishEvent(e);
+            _lastLocationPublish = tMillis;
+        }
+    }
 }
 
-void GPSService::updateIcon(bool status){
+bool PositionService::hasValidPosition() const {
+    return _gps && _gps->GPS && _gps->GPS->location.isValid();
+}
+
+double PositionService::getLatitude() const {
+    return hasValidPosition() ? _gps->GPS->location.lat() : 0.0;
+}
+
+double PositionService::getLongitude() const {
+    return hasValidPosition() ? _gps->GPS->location.lng() : 0.0;
+}
+
+bool PositionService::hasValidHeading() const {
+    return _gps && _gps->GPS && _gps->GPS->course.isValid();
+}
+
+float PositionService::getHeading() const {
+    return hasValidHeading() ? (float)_gps->GPS->course.deg() : 0.0f;
+}
+
+void PositionService::updateIcon(bool status){
     ServiceIcon iconInfo = {
         .serviceID = this->_id,
         .icon = status ? LV_SYMBOL_GPS : "G?",

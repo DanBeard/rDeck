@@ -43,8 +43,11 @@ services:
     volumes:
       - ./data/mbtiles:/data/mbtiles:ro
       - ./data/tileserver:/data/config:ro
-    entrypoint: /bin/sh
+    entrypoint: /bin/bash
     command: >
-      -c "ln -sf '/usr/src/app/node_modules/tileserver-gl-styles/fonts/Noto Sans Regular' '/data/Noto Sans Regular' &&
+      -c "ln -sf '/usr/src/app/node_modules/tileserver-gl-styles/fonts/Noto Sans Regular' '/data/Noto Sans Regular' 2>/dev/null || true;
+          rm -f /tmp/.X99-lock;
+          export DISPLAY=:99;
+          Xvfb $$DISPLAY -nolisten unix &
           exec node /usr/src/app/ --config /data/config/tileserver-config.json --verbose"
     restart: unless-stopped

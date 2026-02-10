@@ -3,7 +3,8 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SERVER_DIR="$(dirname "$SCRIPT_DIR")"
-DATA_DIR="$SCRIPT_DIR/data/companion-server"
+DATA_DIR="${COMPANION_DATA_DIR:-$HOME/.companion-server}"
+OLD_DATA_DIR="$SCRIPT_DIR/data/companion-server"
 
 # Check if setup has been run
 if [ ! -f "$SCRIPT_DIR/data/mbtiles/tiles.mbtiles" ]; then
@@ -16,58 +17,55 @@ if [ ! -f "$SCRIPT_DIR/data/mbtiles/tiles.mbtiles" ]; then
     echo ""
 fi
 
+# One-time migration: copy identity + trust from old docker data dir
+if [ -f "$OLD_DATA_DIR/reticulum/identity" ]; then
+    if [ ! -f "$DATA_DIR/reticulum/identity" ]; then
+        echo "Migrating identity and trust data from docker/data/ to $DATA_DIR..."
+        mkdir -p "$DATA_DIR/reticulum"
+        cp "$OLD_DATA_DIR/reticulum/identity" "$DATA_DIR/reticulum/identity"
+        [ -f "$OLD_DATA_DIR/trust.json" ] && cp "$OLD_DATA_DIR/trust.json" "$DATA_DIR/trust.json"
+        echo "Migration complete. Old data preserved in $OLD_DATA_DIR"
+    elif ! cmp -s "$OLD_DATA_DIR/reticulum/identity" "$DATA_DIR/reticulum/identity"; then
+        # Identities differ — prefer docker one if it's newer (likely has active trust)
+        if [ "$OLD_DATA_DIR/reticulum/identity" -nt "$DATA_DIR/reticulum/identity" ]; then
+            echo "Updating identity from docker/data/ (newer, has active trust relationships)..."
+            cp "$DATA_DIR/reticulum/identity" "$DATA_DIR/reticulum/identity.bak"
+            cp "$OLD_DATA_DIR/reticulum/identity" "$DATA_DIR/reticulum/identity"
+            [ -f "$OLD_DATA_DIR/trust.json" ] && cp "$OLD_DATA_DIR/trust.json" "$DATA_DIR/trust.json"
+            echo "Identity updated. Old identity backed up to identity.bak"
+        fi
+    fi
+fi
+
+# Warn if Nominatim data looks stale (imported from a different region)
+if [ -f "$SCRIPT_DIR/.env" ] && [ -d "$SCRIPT_DIR/data/nominatim" ]; then
+    CURRENT_PBF=$(grep '^REGION_PBF_FILE=' "$SCRIPT_DIR/.env" 2>/dev/null | cut -d= -f2)
+    # Check if Nominatim has already imported (marker file exists) but data might be stale
+    if [ -f "$SCRIPT_DIR/data/nominatim/import-finished" ] && [ -n "$CURRENT_PBF" ]; then
+        # If the PBF file is newer than the import marker, data is likely stale
+        if [ "$SCRIPT_DIR/data/pbf/$CURRENT_PBF" -nt "$SCRIPT_DIR/data/nominatim/import-finished" ] 2>/dev/null; then
+            echo ""
+            echo "WARNING: Nominatim data may be stale (PBF is newer than import)."
+            echo "         Run ./setup.sh again to re-import, or manually clear:"
+            echo "         rm -rf $SCRIPT_DIR/data/nominatim && rm -rf $SCRIPT_DIR/data/valhalla"
+            echo ""
+        fi
+    fi
+fi
+
 # Start Docker services (Valhalla, Nominatim, tileserver-gl)
 echo "Starting Docker services..."
 docker compose -f "$SCRIPT_DIR/docker-compose.yml" up -d
 
-# Ensure data directory exists
-mkdir -p "$DATA_DIR"
-
-# Determine tileserver URL
-TILESERVER_PORT="${TILESERVER_PORT:-8081}"
-TILESERVER_URL="http://localhost:${TILESERVER_PORT}"
-
-# Generate default config if none exists
-if [ ! -f "$DATA_DIR/config.json" ]; then
-    echo "Generating default companion server config..."
-    cat > "$DATA_DIR/config.json" << EOF
-{
-  "server_name": "Companion Server",
-  "enabled_services": ["ntp", "search", "maps"],
-  "search_max_results": 5,
-  "ai_summary_enabled": false,
-  "ai_summary_model_path": null,
-  "ai_summary_max_tokens": 256,
-  "ai_summary_context_size": 2048,
-  "ntp_refresh_interval": 3600,
-  "maps_enabled": true,
-  "maps_mbtiles_path": null,
-  "maps_valhalla_url": "http://localhost:8002",
-  "maps_nominatim_url": "http://localhost:8080",
-  "maps_tileserver_url": "$TILESERVER_URL"
-}
-EOF
-else
-    # Update existing config with tileserver URL if not set
-    if grep -q '"maps_tileserver_url": null' "$DATA_DIR/config.json" 2>/dev/null; then
-        echo "Updating config with tileserver URL..."
-        sed -i "s|\"maps_tileserver_url\": null|\"maps_tileserver_url\": \"$TILESERVER_URL\"|" "$DATA_DIR/config.json"
-    elif ! grep -q 'maps_tileserver_url' "$DATA_DIR/config.json" 2>/dev/null; then
-        # Field doesn't exist at all - add it before the closing brace
-        echo "Adding tileserver URL to config..."
-        sed -i "s|}|,\n  \"maps_tileserver_url\": \"$TILESERVER_URL\"\n}|" "$DATA_DIR/config.json"
-    fi
-fi
-
 echo ""
-echo "Tileserver: $TILESERVER_URL"
+echo "Tileserver: http://localhost:${TILESERVER_PORT:-8081}"
 echo "Valhalla:   http://localhost:8002/status"
 echo "Nominatim:  http://localhost:8080/search?q=test&format=json"
 echo ""
-echo "Starting companion server TUI..."
+echo "Starting companion server..."
 echo "(Ctrl+C to stop the server. Run 'docker compose -f $SCRIPT_DIR/docker-compose.yml down' to stop Docker services.)"
 echo ""
 
-# Run companion server natively with the TUI via uv
+# Run companion server with maps enabled, passing through any extra args
 cd "$SERVER_DIR"
-exec uv run python -m companion_server --data-dir "$DATA_DIR"
+exec uv run python -m companion_server --data-dir "$DATA_DIR" --with-maps "$@"

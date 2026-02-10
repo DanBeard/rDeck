@@ -34,6 +34,8 @@ public:
     void startSearch();
     void performSearch(const std::string& query);
     void goToLocation(int32_t lat, int32_t lon);
+    void setSearchPinName(const std::string& name) { _searchPinName = name; }
+    void retrySearch();
 
     // Public access to members needed by callbacks
     lv_obj_t* getSearchOverlay() { return _search_overlay; }
@@ -47,6 +49,7 @@ protected:
     void renderMap();
     void drawTile(int screenX, int screenY, const std::vector<uint8_t>& tileData);
     void drawGpsMarker();
+    void drawSearchPin();
     void drawStatusBar();
     void clearCanvas();
 
@@ -85,6 +88,7 @@ protected:
 
     // Search
     void displaySearchResults(const Retcon::Service::MapGeocodeResponsePayload& results);
+    void displaySearchTimeout();
 
     // Route
     void startRouting();
@@ -96,12 +100,16 @@ protected:
     lv_obj_t* _map_canvas = nullptr;
     lv_obj_t* _status_bar = nullptr;
     lv_obj_t* _zoom_label = nullptr;
+    lv_obj_t* _search_hint_label = nullptr;
     lv_obj_t* _coords_label = nullptr;
     lv_obj_t* _search_overlay = nullptr;
     lv_obj_t* _search_input = nullptr;
     lv_obj_t* _search_results_list = nullptr;
+    lv_obj_t* _search_status_label = nullptr;
+    lv_obj_t* _search_retry_btn = nullptr;
     lv_obj_t* _loading_spinner = nullptr;
     lv_obj_t* _error_label = nullptr;
+    lv_obj_t* _search_btn = nullptr;
 
     // Canvas buffer (240x280 = 67200 pixels, but we use 1-bit = 8400 bytes for mono)
     static const int CANVAS_WIDTH = 240;
@@ -110,8 +118,8 @@ protected:
 
     // Map state
     uint8_t _zoom = 14;  // Current zoom level (10-18)
-    double _centerLat = 41.8781;  // Default: Chicago
-    double _centerLon = -87.6298;
+    double _centerLat = 0.0;
+    double _centerLon = 0.0;
     int _pixelOffsetX = 0;  // Sub-tile pixel offset for smooth panning
     int _pixelOffsetY = 0;
 
@@ -119,7 +127,13 @@ protected:
     bool _hasGps = false;
     double _gpsLat = 0;
     double _gpsLon = 0;
-    bool _followGps = false;  // Auto-center on GPS
+    float _gpsHeading = 0.0f;
+    bool _hasHeading = false;
+    bool _followGps = true;  // Auto-center on GPS
+
+    // Zoom buttons
+    lv_obj_t* _zoom_in_btn = nullptr;
+    lv_obj_t* _zoom_out_btn = nullptr;
 
     // Tile cache (RAM)
     std::map<TileKey, CachedTile> _tileCache;
@@ -137,6 +151,18 @@ protected:
     // Search results
     std::vector<Retcon::Service::MapGeocodeResult> _searchResults;
     bool _searchMode = false;
+
+    // Search pin marker
+    bool _hasSearchPin = false;
+    int32_t _searchPinLat = 0;      // lat * 1e7
+    int32_t _searchPinLon = 0;      // lon * 1e7
+    std::string _searchPinName;
+
+    // Search timeout
+    bool _searchPending = false;
+    unsigned long _searchStartTime = 0;
+    std::string _lastSearchQuery;
+    static const unsigned long SEARCH_TIMEOUT_MS = 30000;
 
     // Routing mode
     bool _routeMode = false;

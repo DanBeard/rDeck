@@ -3,13 +3,21 @@
 #include "EmulatorGPS.h"
 #include <cstdio>
 
+static TinyGPSPlus fakeGps;
+
 void EmulatorGPS::initGPS() {
-    printf("[EmulatorGPS] Initialized (no GPS in emulator)\n");
-    GPS = nullptr;  // No GPS hardware in emulator
+    // Configure simulated position: Sears Tower, Chicago
+    fakeGps.location.setLocation(41.8789, -87.6359);
+    fakeGps.course.setCourse(45.0);
+    fakeGps.date.setDate(2026, 2, 10);
+    fakeGps.time.setTime(12, 0, 0);
+
+    GPS = &fakeGps;
+    printf("[EmulatorGPS] Initialized with simulated position (41.8789, -87.6359)\n");
 }
 
 void EmulatorGPS::tick() {
-    // No-op - no GPS data to process
+    // No-op - simulated data is static
 }
 
 #endif

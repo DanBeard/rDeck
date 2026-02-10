@@ -6,7 +6,7 @@
  * TimeService - Centralized time management for rDeck.
  *
  * Coordinates all time sources:
- * - GPS (via GPSService - highest priority)
+ * - GPS (via PositionService - highest priority)
  * - NTP via Reticulum companion servers
  * - Manual setting (lowest priority)
  *
