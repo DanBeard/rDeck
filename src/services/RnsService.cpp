@@ -650,7 +650,24 @@ void RnsService::sendServiceMessage(const RNS::Bytes& dest, const Retcon::Servic
     // Find the destination identity
     RNS::Identity their_ident = RNS::Identity::recall(dest);
     if (!their_ident) {
-        Serial.println("[Service] ERROR: No known identity for destination");
+        // Identity unknown — request path from gateway (which triggers an announce
+        // response containing the public key), then re-queue for retry.
+        Serial.printf("[Service] Identity unknown for %s, requesting path...\n",
+                      dest.toHex().substr(0, 12).c_str());
+        RNS::Transport::request_path(dest);
+
+        // Re-queue this message for retry after path response arrives
+        if (msg.retry_count < MAX_SERVICE_MSG_RETRIES) {
+            Retcon::Service::ServiceMessage retry_msg = msg;
+            retry_msg.retry_count++;
+            RNS::Bytes dest_copy = dest;
+            _pending_actions.push_back([this, dest_copy, retry_msg]() {
+                sendServiceMessage(dest_copy, retry_msg);
+            });
+        } else {
+            Serial.printf("[Service] Giving up on %s after %d retries\n",
+                          dest.toHex().substr(0, 12).c_str(), MAX_SERVICE_MSG_RETRIES);
+        }
         return;
     }
 
@@ -702,7 +719,11 @@ void RnsService::sendServiceMessage(const RNS::Bytes& dest, const Retcon::Servic
     Serial.printf("[Service] Sent message type 0x%02X to %s\n",
                   static_cast<uint8_t>(msg.msg_type), dest.toHex().substr(0, 12).c_str());
 
-    } catch (...) {}
+    } catch (std::exception& e) {
+        Serial.printf("[Service] EXCEPTION in sendServiceMessage: %s\n", e.what());
+    } catch (...) {
+        Serial.println("[Service] UNKNOWN EXCEPTION in sendServiceMessage");
+    }
 }
 
 void RnsService::sendTrustAccept(const RNS::Bytes& serverHash) {

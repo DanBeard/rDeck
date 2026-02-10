@@ -39,6 +39,7 @@ public:
     static const size_t max_number_queued_msgs = 5;
     static const size_t max_number_retries = 4;
     static const time_t packet_timeout_secs = 10;
+    static const uint8_t MAX_SERVICE_MSG_RETRIES = 10;  // Path request retries before giving up
 
     explicit RnsService(uint8_t id);
     virtual void start(RetOS* retos) override; // called after construction once the OS is ready to launch services

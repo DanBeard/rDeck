@@ -270,6 +270,7 @@ struct ServiceMessage {
     std::string service;
     RNS::Bytes payload;  // Raw msgpack payload bytes
     uint32_t request_id = 0;
+    uint8_t retry_count = 0;  // Internal: path-request retry counter (not serialized)
 
     // Check if LXMF fields contain a service message
     static bool isServiceMessage(JsonDocument& fields);
