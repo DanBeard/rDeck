@@ -40,7 +40,12 @@ public:
         _mutex.lock();
     }
     ~PlatformMutexGuard() {
-        _mutex.unlock();
+        // Catch exceptions in destructor to prevent std::terminate during
+        // stack unwinding. try-catch has zero runtime cost on x86_64
+        // (zero-cost exception model) when no exception is thrown.
+        try {
+            _mutex.unlock();
+        } catch (...) {}
     }
 
     // Non-copyable

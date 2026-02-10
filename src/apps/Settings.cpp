@@ -245,7 +245,10 @@ static void trustAcceptCallback(lv_event_t* e) {
 
             RnsService* rns = retOsGlobalPtr->fetchService<RnsService>();
             if (rns) {
-                rns->sendTrustAccept(serverHash);
+                // Queue on services thread — microReticulum is not thread-safe
+                rns->queueAction([rns, serverHash]() {
+                    rns->sendTrustAccept(serverHash);
+                });
             }
 
             // If server offers NTP, request time sync via TimeService
@@ -254,9 +257,14 @@ static void trustAcceptCallback(lv_event_t* e) {
                 for (const auto& svc : server->services) {
                     if (svc == "ntp") {
                         Serial.println("[Settings] Server offers NTP, requesting time sync...");
-                        TimeService* timeSvc = retOsGlobalPtr->fetchService<TimeService>();
-                        if (timeSvc) {
-                            timeSvc->requestNtpSync();
+                        if (rns) {
+                            // Queue NTP request on services thread too
+                            rns->queueAction([]() {
+                                TimeService* timeSvc = retOsGlobalPtr->fetchService<TimeService>();
+                                if (timeSvc) {
+                                    timeSvc->requestNtpSync();
+                                }
+                            });
                         }
                         break;
                     }

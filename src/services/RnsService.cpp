@@ -7,6 +7,7 @@
 #include "Bytes.h"
 #include "apps/Settings.h"
 #include "RnsUtils/LXMFData.h"
+#include <iterator>
 
 //using namespace Retcon::LXMF;
 
@@ -89,8 +90,6 @@ static void onLink(RNS::Link& link) {
 
 void RnsService::start(RetOS* retos){
     updateIcon(false);
-
-    // PlatformMutex creates mutex in constructor, no explicit init needed
 
     // pause and then load config
     RetHal hal = retos->hal();
@@ -330,7 +329,7 @@ void RnsService::announce() {
 }
 
 void RnsService::processNextInQueue() {
-    _msg_mutex.lock();
+    PlatformMutexGuard guard(_msg_mutex);
     if(!_sending_message && _send_msg_queue.size() > 0) {
         transmitMsg(_send_msg_queue.front());
         _send_msg_queue.pop();
@@ -339,12 +338,43 @@ void RnsService::processNextInQueue() {
         // Retry the current message
         transmitMsg(_current_sending_msg);
     }
-    _msg_mutex.unlock();
+}
+
+void RnsService::queueAction(std::function<void()> action) {
+    PlatformMutexGuard guard(_action_mutex);
+    _pending_actions.push_back(std::move(action));
 }
 
 static unsigned long last_announce = 0;
 
 void RnsService::tick(const unsigned long tMillis) {
+    // Drain queued actions from UI thread (rate-limited)
+    // Process at most MAX_ACTIONS_PER_TICK to avoid overwhelming Transport
+    // with rapid-fire packet sends (e.g., 9 tile requests from Maps).
+    // Remaining actions stay queued for the next tick.
+    {
+        std::vector<std::function<void()>> actions;
+        {
+            PlatformMutexGuard guard(_action_mutex);
+            if (_pending_actions.size() <= MAX_ACTIONS_PER_TICK) {
+                actions.swap(_pending_actions);
+            } else {
+                // Take only the first N actions, leave the rest
+                actions.assign(
+                    std::make_move_iterator(_pending_actions.begin()),
+                    std::make_move_iterator(_pending_actions.begin() + MAX_ACTIONS_PER_TICK)
+                );
+                _pending_actions.erase(_pending_actions.begin(),
+                                       _pending_actions.begin() + MAX_ACTIONS_PER_TICK);
+            }
+        }
+        for (auto& action : actions) {
+            try {
+                action();
+            } catch (...) {}
+        }
+    }
+
     // Periodic announce
     if(tMillis - last_announce > (10*60*1000) || tMillis < last_announce){
         Serial.println("RNS ANNOUNCE");
@@ -409,20 +439,18 @@ shared_ptr<Retcon::LXMF::Message> RnsService::sendLxmfMsg(const RNS::Bytes dest,
     // Store in conversation immediately so it shows in the UI
     Retcon::LXMF::addMessageToConversation(*msg, dest);
 
-    _msg_mutex.lock();
-
-    Serial.println("QUEUEING LXMF MESSAGE");
-    if(_send_msg_queue.size() > max_number_queued_msgs) {
-        Serial.println("DROPPING LXMF MESSAGE - queue full");
-        _msg_mutex.unlock();
-        return msg;
+    {
+        PlatformMutexGuard guard(_msg_mutex);
+        Serial.println("QUEUEING LXMF MESSAGE");
+        if(_send_msg_queue.size() > max_number_queued_msgs) {
+            Serial.println("DROPPING LXMF MESSAGE - queue full");
+            return msg;
+        }
+        _send_msg_queue.push(msg);
+        // Defer actual transmit to tick() on the services task, avoiding
+        // cross-thread calls into Transport::outbound() which can deadlock.
+        _needs_send_processing = true;
     }
-    _send_msg_queue.push(msg);
-    // Defer actual transmit to tick() on the services task, avoiding
-    // cross-thread calls into Transport::outbound() which can deadlock.
-    _needs_send_processing = true;
-
-    _msg_mutex.unlock();
 
     // Notify UI so the message appears immediately
     Event e;
@@ -444,7 +472,7 @@ const queue<shared_ptr<Retcon::LXMF::Message>>& RnsService::queuedMsgs() const {
 // Instead, update state and set a flag for tick() to process.
 
 void transmit_delivery_cb(const RNS::PacketReceipt &receipt) {
-    rnsService->_msg_mutex.lock();
+    PlatformMutexGuard guard(rnsService->_msg_mutex);
 
     rnsService->_sending_message = false;
     delete rnsService->_sending_packet;
@@ -455,11 +483,9 @@ void transmit_delivery_cb(const RNS::PacketReceipt &receipt) {
 
     // Defer sending next queued message to tick()
     rnsService->_needs_send_processing = true;
-
-    rnsService->_msg_mutex.unlock();
 }
 void transmit_timeout_cb(const RNS::PacketReceipt &receipt) {
-    rnsService->_msg_mutex.lock();
+    PlatformMutexGuard guard(rnsService->_msg_mutex);
 
     rnsService->_current_sending_msg->status = Retcon::LXMF::Message::STATUS::RETRY;
     rnsService->sendMessageUpdateEvent(rnsService->_current_sending_msg);
@@ -476,8 +502,6 @@ void transmit_timeout_cb(const RNS::PacketReceipt &receipt) {
 
     // Defer retry/next-send to tick()
     rnsService->_needs_send_processing = true;
-
-    rnsService->_msg_mutex.unlock();
 }
 void RnsService::transmitMsg(shared_ptr<Retcon::LXMF::Message>& msg) {
     if(_sending_message && msg != _current_sending_msg) return;
@@ -622,6 +646,7 @@ void RnsService::mergeLoraSettings(LoraConfig& config) {
 // ============================================================================
 
 void RnsService::sendServiceMessage(const RNS::Bytes& dest, const Retcon::Service::ServiceMessage& msg) {
+    try {
     // Find the destination identity
     RNS::Identity their_ident = RNS::Identity::recall(dest);
     if (!their_ident) {
@@ -676,6 +701,8 @@ void RnsService::sendServiceMessage(const RNS::Bytes& dest, const Retcon::Servic
 
     Serial.printf("[Service] Sent message type 0x%02X to %s\n",
                   static_cast<uint8_t>(msg.msg_type), dest.toHex().substr(0, 12).c_str());
+
+    } catch (...) {}
 }
 
 void RnsService::sendTrustAccept(const RNS::Bytes& serverHash) {

@@ -101,6 +101,7 @@ protected:
     lv_obj_t* _search_input = nullptr;
     lv_obj_t* _search_results_list = nullptr;
     lv_obj_t* _loading_spinner = nullptr;
+    lv_obj_t* _error_label = nullptr;
 
     // Canvas buffer (240x280 = 67200 pixels, but we use 1-bit = 8400 bytes for mono)
     static const int CANVAS_WIDTH = 240;
@@ -147,9 +148,14 @@ protected:
     RNS::Bytes _mapsServerHash;
     bool findMapsServer();
 
+    // Error display
+    void showError(const char* msg);
+    void clearError();
+
     // Timing
     unsigned long _lastTileRequest = 0;
     static const unsigned long TILE_REQUEST_THROTTLE_MS = 100;
+    static const uint32_t TILE_REQUEST_TIMEOUT_MS = 15000;  // 15s timeout for pending requests
 
     // Zoom limits
     static const uint8_t MIN_ZOOM = 10;

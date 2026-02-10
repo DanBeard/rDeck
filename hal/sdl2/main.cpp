@@ -13,6 +13,7 @@
 #include <Arduino.h>
 #include <SDL2/SDL.h>
 #include <cstring>
+#include <cstdlib>
 
 // External Arduino-style entry points defined in rdeck.ino
 extern void setup();
@@ -27,6 +28,42 @@ extern "C" const char* emu_get_autolaunch_app() {
     return g_autoLaunchApp;
 }
 
+#ifdef DEBUG
+#include <exception>
+#include <execinfo.h>
+#include <cxxabi.h>
+
+// Custom terminate handler - prints stack trace before aborting
+static void custom_terminate() {
+    fprintf(stderr, "\n=== FATAL: std::terminate() called ===\n");
+
+    if (auto eptr = std::current_exception()) {
+        try {
+            std::rethrow_exception(eptr);
+        } catch (const std::exception& e) {
+            fprintf(stderr, "Exception: %s\n", e.what());
+        } catch (...) {
+            fprintf(stderr, "Unknown exception type\n");
+        }
+    }
+
+    fprintf(stderr, "Stack trace:\n");
+    void* frames[64];
+    int count = backtrace(frames, 64);
+    char** symbols = backtrace_symbols(frames, count);
+    if (symbols) {
+        for (int i = 0; i < count; i++) {
+            fprintf(stderr, "  [%d] %s\n", i, symbols[i]);
+        }
+        free(symbols);
+    }
+
+    fprintf(stderr, "=== END TRACE ===\n");
+    fflush(stderr);
+    abort();
+}
+#endif
+
 static void printUsage(const char* progname) {
     printf("Usage: %s [options]\n", progname);
     printf("Options:\n");
@@ -36,6 +73,10 @@ static void printUsage(const char* progname) {
 }
 
 int main(int argc, char* argv[]) {
+#ifdef DEBUG
+    std::set_terminate(custom_terminate);
+#endif
+
     // Parse command-line arguments
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--launch-app") == 0 && i + 1 < argc) {

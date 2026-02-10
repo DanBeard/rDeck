@@ -8,7 +8,7 @@ rDeck is a custom operating system (RetOS) for the LilyGo T-Deck Pro hardware—
 
 ### Vision
 
-rDeck aims to be a **Reticulum-first off-grid smartphone replacement**. The device operates entirely without internet or cellular connectivity, using LoRa mesh networking for communication. The Companion Server system extends its capabilities by providing infrastructure services (NTP time sync, web search) to trusted devices over the mesh network, enabling smartphone-like functionality while maintaining complete independence from traditional infrastructure.
+rDeck aims to be a **Reticulum-first off-grid smartphone replacement**. The device operates entirely without internet or cellular connectivity, using LoRa mesh networking for communication. The Companion Server system extends its capabilities by providing infrastructure services (NTP time sync, web search, offline maps) to trusted devices over the mesh network, enabling smartphone-like functionality while maintaining complete independence from traditional infrastructure.
 
 ### Key Principles
 
@@ -86,8 +86,10 @@ Apps inherit from `BaseApp`. Single active app at a time.
 | UChat | `UChat.cpp` | LXMF encrypted messaging with conversation persistence |
 | Clock | `Clock.cpp` | Time display with timezone support |
 | Notes | `Notes.cpp` | Local note-taking with persistence |
+| Maps | `Maps.cpp` | Offline map tiles with GPS tracking, pan/zoom, geocoding, routing |
 | Settings | `Settings.cpp` | System settings, **Trusted Servers management** |
 | WebSearch | `WebSearch.cpp` | Web search via companion server |
+| CleanScreen | `CleanScreen.cpp` | Screen clearing utility |
 
 **Register new apps** in `rdeck.ino`:
 ```cpp
@@ -96,12 +98,14 @@ AppFactory<MyApp>("Name", &icon)  // in apps list
 
 ### Services (`src/services/`)
 
-Services inherit from `BaseService`. Run continuously in background.
+Services inherit from `BaseService`. Run continuously in background. **Start order matters** — WifiService must start before RnsService.
 
 | Service | File | Description |
 |---------|------|-------------|
+| GPSService | `GPSService.cpp` | GPS data processing, location updates |
+| WifiService | `WifiService.cpp` | WiFi connectivity, TCP interface as alternative to LoRa |
 | RnsService | `RnsService.cpp` | Reticulum identity, LoRa interface, LXMF messaging, **trust management, service message routing** |
-| GPSService | `GPSService.cpp` | GPS data processing, **time sync with priority** |
+| TimeService | `TimeService.cpp` | Centralized time management with source priority (GPS > NTP > Manual) |
 
 **Register new services** in `rdeck.ino`:
 ```cpp
@@ -134,16 +138,33 @@ companion-server/
 │   ├── services/
 │   │   ├── base_service.py  # Service interface
 │   │   ├── ntp_service.py   # Time synchronization
-│   │   └── search_service.py# DuckDuckGo proxy
+│   │   ├── search_service.py# DuckDuckGo proxy
+│   │   └── maps_service.py  # Map tiles, routing, geocoding
 │   └── tui/
 │       ├── app.py           # Main Textual app
 │       ├── announce_view.py # Announce stream widget
 │       └── trust_view.py    # Trusted devices widget
+├── docker/                  # Docker infrastructure for maps
+│   ├── setup.sh             # Region selection, PBF download, tile generation
+│   ├── run.sh               # Start Docker services + companion server TUI
+│   ├── docker-compose.yml   # tileserver-gl, Valhalla, Nominatim
+│   ├── tileserver-config.json
+│   ├── tileserver-style.json # Grayscale style for e-ink
+│   ├── reticulum-config     # TCP server interface config
+│   └── README.md            # Docker setup documentation
 └── tests/                   # Comprehensive test suite
 ```
 
 ### Running
 
+**With maps (Docker):**
+```bash
+cd companion-server/docker
+./setup.sh    # One-time: pick region, download data, generate tiles
+./run.sh      # Start tileserver + Valhalla + Nominatim + companion server TUI
+```
+
+**Without maps:**
 ```bash
 cd companion-server
 python3 -m venv .venv
@@ -161,26 +182,38 @@ Messages use LXMF fields with msgpack encoding. **Both Python and C++ must use i
 ```cpp
 // C++: src/services/RnsUtils/ServiceProtocol.h
 enum class MessageType : uint8_t {
-    TRUST_OFFER     = 0x01,  // Server offers services
-    TRUST_ACCEPT    = 0x02,  // Device accepts offer
-    TRUST_REVOKE    = 0x03,  // Either side revokes
-    NTP_REQUEST     = 0x10,  // Device requests time
-    NTP_RESPONSE    = 0x11,  // Server responds with time
-    SEARCH_REQUEST  = 0x20,  // Device sends query
-    SEARCH_RESPONSE = 0x21,  // Server returns results
+    TRUST_OFFER         = 0x01,  // Server offers services
+    TRUST_ACCEPT        = 0x02,  // Device accepts offer
+    TRUST_REVOKE        = 0x03,  // Either side revokes
+    NTP_REQUEST         = 0x10,  // Device requests time
+    NTP_RESPONSE        = 0x11,  // Server responds with time
+    SEARCH_REQUEST      = 0x20,  // Device sends query
+    SEARCH_RESPONSE     = 0x21,  // Server returns results
+    MAP_TILE_REQUEST    = 0x30,  // Device requests map tile
+    MAP_TILE_RESPONSE   = 0x31,  // Server returns tile data
+    MAP_ROUTE_REQUEST   = 0x33,  // Device requests route
+    MAP_ROUTE_RESPONSE  = 0x34,  // Server returns route
+    MAP_GEOCODE_REQUEST = 0x35,  // Device searches address
+    MAP_GEOCODE_RESPONSE= 0x36,  // Server returns locations
 };
 ```
 
 ```python
 # Python: companion_server/protocol/messages.py
 class MessageType(IntEnum):
-    TRUST_OFFER     = 0x01
-    TRUST_ACCEPT    = 0x02
-    TRUST_REVOKE    = 0x03
-    NTP_REQUEST     = 0x10
-    NTP_RESPONSE    = 0x11
-    SEARCH_REQUEST  = 0x20
-    SEARCH_RESPONSE = 0x21
+    TRUST_OFFER         = 0x01
+    TRUST_ACCEPT        = 0x02
+    TRUST_REVOKE        = 0x03
+    NTP_REQUEST         = 0x10
+    NTP_RESPONSE        = 0x11
+    SEARCH_REQUEST      = 0x20
+    SEARCH_RESPONSE     = 0x21
+    MAP_TILE_REQUEST    = 0x30
+    MAP_TILE_RESPONSE   = 0x31
+    MAP_ROUTE_REQUEST   = 0x33
+    MAP_ROUTE_RESPONSE  = 0x34
+    MAP_GEOCODE_REQUEST = 0x35
+    MAP_GEOCODE_RESPONSE= 0x36
 ```
 
 ### LXMF Fields Structure
@@ -188,7 +221,7 @@ class MessageType(IntEnum):
 ```python
 fields = {
     "msg_type": <uint8>,      # MessageType enum value
-    "service": <string>,      # "trust", "ntp", "search"
+    "service": <string>,      # "trust", "ntp", "search", "maps"
     "payload": <bytes>,       # Msgpack-encoded payload
     "request_id": <uint32>    # For request/response correlation
 }
@@ -204,6 +237,12 @@ fields = {
 | NTP_RESPONSE | `server_timestamp`, `client_timestamp` |
 | SEARCH_REQUEST | `query`, `max_results` |
 | SEARCH_RESPONSE | `query`, `results` (array of {title, url, snippet}), `error` |
+| MAP_TILE_REQUEST | `z`, `x`, `y`, `format` (TileFormat enum) |
+| MAP_TILE_RESPONSE | `z`, `x`, `y`, `format`, `chunk_index`, `total_chunks`, `data`, `error` |
+| MAP_ROUTE_REQUEST | `start_lat`, `start_lon`, `end_lat`, `end_lon` (int32 * 1e7), `mode` |
+| MAP_ROUTE_RESPONSE | `points` (lat/lon pairs * 1e7), `instructions`, `total_distance_m`, `total_time_s`, `error` |
+| MAP_GEOCODE_REQUEST | `query`, `bias_lat`, `bias_lon` (int32 * 1e7), `has_bias`, `max_results` |
+| MAP_GEOCODE_RESPONSE | `query`, `results` (array of {display_name, lat, lon, type}), `error` |
 
 ## Trust Workflow
 
@@ -360,7 +399,26 @@ with EmulatorCapture() as emu:
 - lxmf - LXMF messaging
 - textual - Terminal UI
 - msgpack - Binary serialization
-- httpx - HTTP client for search proxy
+- httpx - HTTP client for search and maps service proxying
+- Pillow - Image processing (tile dithering for e-ink)
+
+## Docker Maps Infrastructure (`companion-server/docker/`)
+
+Self-hosted offline maps using OpenStreetMap data. Three Docker services provide tile rendering, routing, and geocoding.
+
+| Service | Port | Purpose |
+|---------|------|---------|
+| tileserver-gl | 8081 | Renders vector MBTiles to grayscale PNG tiles |
+| Valhalla | 8002 | Turn-by-turn routing with elevation data |
+| Nominatim | 8080 | Address/place search (geocoding) |
+
+**Setup flow**: `setup.sh` downloads a regional PBF from Geofabrik, generates vector MBTiles via Planetiler, and configures services. `run.sh` starts Docker containers and launches the companion server TUI.
+
+**Tile pipeline**: tileserver-gl renders vector tiles → companion server fetches PNG → resizes to 128x128 → Floyd-Steinberg dithers to 1-bit → optional RLE compression → chunks into ≤200 byte packets for LoRa.
+
+**Coordinates**: All lat/lon values use int32 * 1e7 encoding to avoid floating-point on embedded targets.
+
+See `companion-server/docker/README.md` for region selection, resource requirements, and data management.
 
 ## Common Tasks
 

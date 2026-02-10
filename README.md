@@ -4,7 +4,7 @@ A Reticulum-first off-grid smartphone replacement built on the LilyGo T-Deck Pro
 
 ## Vision
 
-rDeck transforms the T-Deck Pro into a fully functional off-grid communication device. Using the Reticulum Network Stack, it provides encrypted mesh messaging without any internet or cellular infrastructure. When paired with a Companion Server on an internet-connected machine, rDeck gains smartphone-like capabilities—time synchronization, web search, and more—all delivered securely over the mesh network.
+rDeck transforms the T-Deck Pro into a fully functional off-grid communication device. Using the Reticulum Network Stack, it provides encrypted mesh messaging without any internet or cellular infrastructure. When paired with a Companion Server, rDeck gains smartphone-like capabilities—time synchronization, web search, offline maps with routing and geocoding—all delivered securely over the mesh network.
 
 **No cell towers. No internet on the device. Just encrypted mesh.**
 
@@ -20,6 +20,7 @@ rDeck transforms the T-Deck Pro into a fully functional off-grid communication d
 When connected to a trusted Companion Server:
 - **NTP Time Sync**: Accurate time over the mesh network
 - **Web Search**: Search the web via DuckDuckGo proxy
+- **Offline Maps**: Pan/zoom map tiles, GPS tracking, address search, and routing — all from self-hosted OpenStreetMap data
 - **Extensible**: Protocol supports adding new services
 
 ### Hardware Features
@@ -82,19 +83,24 @@ pio run -e emulator_64bits
 
 ### Running the Companion Server
 
-The Companion Server provides internet-backed services to rDeck devices over Reticulum.
+The Companion Server provides services to rDeck devices over Reticulum. The Docker setup includes map tile rendering, routing, and geocoding.
+
+```bash
+cd companion-server/docker
+
+# One-time setup: pick a region, download OSM data, generate tiles
+./setup.sh
+
+# Start Docker services (tileserver, Valhalla, Nominatim) + companion server TUI
+./run.sh
+```
+
+Or run without maps (NTP and search only):
 
 ```bash
 cd companion-server
-
-# Create virtual environment
-python3 -m venv .venv
-source .venv/bin/activate
-
-# Install
+python3 -m venv .venv && source .venv/bin/activate
 pip install -e .
-
-# Run
 python -m companion_server
 ```
 
@@ -102,6 +108,8 @@ The TUI will display:
 - **Announce Stream**: Devices announcing on the network
 - **Trusted Devices**: Devices you've established trust with
 - **Log Panel**: Service activity and debug information
+
+See `companion-server/docker/README.md` for region selection, resource requirements, and troubleshooting.
 
 ## Trust Workflow
 
@@ -145,6 +153,7 @@ rDeck uses a mutual trust model for security. Both the device and server must ex
 Once trusted, rDeck will automatically:
 - Sync time via NTP on startup
 - Enable web search in the WebSearch app
+- Enable offline maps with tile fetching, routing, and geocoding
 
 ## Architecture
 
@@ -163,9 +172,11 @@ Once trusted, rDeck will automatically:
 │  │      Apps       │     │  │   GPSService    │             │
 │  │ Launcher, UChat │     │  │  (Location +    │             │
 │  │ Clock, Notes,   │     │  │   Time sync)    │             │
-│  │ Settings,       │     │  └─────────────────┘             │
-│  │ WebSearch       │     │                                  │
-│  └─────────────────┘     │                                  │
+│  │ Settings, Maps, │     │  └─────────────────┘             │
+│  │ WebSearch       │     │  ┌─────────────────┐             │
+│  └─────────────────┘     │  │  WifiService    │             │
+│                          │  │  TimeService    │             │
+│                          │  └─────────────────┘             │
 ├──────────────────────────┴──────────────────────────────────┤
 │                    Hardware Abstraction                      │
 │    Screen │ Keyboard │ Battery │ GPS │ LoRa │ Filesystem    │
@@ -180,8 +191,9 @@ Once trusted, rDeck will automatically:
 | **RetUI** | LVGL-based UI with top bar and app screen area |
 | **RnsService** | Reticulum identity, LXMF messaging, trust management |
 | **GPSService** | GPS coordinates and time synchronization |
+| **WifiService** | WiFi connectivity, enables TCP interface as alternative to LoRa |
+| **TimeService** | Centralized time management with source priority (GPS > NTP > Manual) |
 | **TrustedServers** | Persistent storage of trusted companion servers |
-| **TimeHelper** | Time source priority (GPS > NTP > Manual) |
 
 ## Apps
 
@@ -191,6 +203,7 @@ Once trusted, rDeck will automatically:
 | **UChat** | LXMF encrypted messaging |
 | **Clock** | Time display with timezone support |
 | **Notes** | Local note-taking |
+| **Maps** | Offline maps with GPS tracking, pan/zoom, geocoding, and routing |
 | **Settings** | System settings, trusted servers management |
 | **WebSearch** | Web search via companion server |
 
@@ -223,8 +236,12 @@ rDeck/
 ├── companion-server/   # Python companion server
 │   ├── companion_server/
 │   │   ├── protocol/   # Message definitions, serialization
-│   │   ├── services/   # NTP, Search services
+│   │   ├── services/   # NTP, Search, Maps services
 │   │   └── tui/        # Textual TUI
+│   ├── docker/         # Docker setup for maps infrastructure
+│   │   ├── setup.sh    # Region selection and data download
+│   │   ├── run.sh      # Start services + companion server
+│   │   └── docker-compose.yml  # tileserver, Valhalla, Nominatim
 │   └── tests/          # Python test suite
 ├── test/               # C++ unit tests
 ├── hal/                # SDL2 HAL for emulator
@@ -246,6 +263,12 @@ rDeck and the Companion Server communicate using a msgpack-based protocol over L
 | NTP_RESPONSE | 0x11 | Server→Device | Time response with RTT data |
 | SEARCH_REQUEST | 0x20 | Device→Server | Web search query |
 | SEARCH_RESPONSE | 0x21 | Server→Device | Search results |
+| MAP_TILE_REQUEST | 0x30 | Device→Server | Request map tile (z/x/y) |
+| MAP_TILE_RESPONSE | 0x31 | Server→Device | 1-bit dithered tile data (chunked) |
+| MAP_ROUTE_REQUEST | 0x33 | Device→Server | Routing between two points |
+| MAP_ROUTE_RESPONSE | 0x34 | Server→Device | Route geometry + turn instructions |
+| MAP_GEOCODE_REQUEST | 0x35 | Device→Server | Address/place search |
+| MAP_GEOCODE_RESPONSE | 0x36 | Server→Device | Geocode results with coordinates |
 
 ## Contributing
 

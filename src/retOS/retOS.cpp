@@ -123,9 +123,11 @@ void _services_loop(void* _) {
      while(true) {
         const unsigned long tmillis = millis();
         for(auto service : retos->_services) {
-            service->tick(tmillis);
+            try {
+                service->tick(tmillis);
+            } catch (...) {}
       }
-      delay(1);   
+      delay(1);
      }
 }
 

@@ -24,14 +24,55 @@ void Maps::start(RetOS* retos) {
     _keep_awake = true;
     drawUI();
 
-    // Find a trusted server with maps capability
-    findMapsServer();
+    // Check if RnsService is available and fully initialized
+    RnsService* rns = _retos->fetchService<RnsService>();
+    if (!rns || rns->status() != RUNNING) {
+        Serial.println("[Maps] RnsService not ready yet");
+        showError("Waiting for network service...");
+        return;
+    }
 
-    // Request initial tiles
+    // Find a trusted server with maps capability
+    if (!findMapsServer()) {
+        showError("No trusted maps server found.\nAdd one in Settings > Trusted Servers.");
+    }
+
+    // Request initial tiles (will no-op if no server)
     requestVisibleTiles();
 }
 
 void Maps::tick(const unsigned long tickMillis) {
+    // Retry finding server if we don't have one yet
+    if (_mapsServerHash.size() == 0) {
+        // Retry every 2 seconds instead of every tick
+        if (tickMillis - _lastTileRequest > 2000) {
+            if (findMapsServer()) {
+                clearError();
+                renderMap();
+            }
+            _lastTileRequest = tickMillis;
+        }
+        return;
+    }
+
+    // Expire stale pending requests so failed sends don't permanently block new ones
+    if (!_pendingTileRequests.empty()) {
+        std::vector<TileKey> expired;
+        for (const auto& [key, requestId] : _pendingTileRequests) {
+            // requestId is millis() & 0xFFFFFFFF at queue time
+            uint32_t age = (uint32_t)(tickMillis & 0xFFFFFFFF) - requestId;
+            if (age > TILE_REQUEST_TIMEOUT_MS) {
+                expired.push_back(key);
+            }
+        }
+        for (const auto& key : expired) {
+            _pendingTileRequests.erase(key);
+        }
+        if (!expired.empty() && _pendingTileRequests.empty()) {
+            lv_obj_add_flag(_loading_spinner, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+
     // Request tiles if we have pending area to fill
     if (tickMillis - _lastTileRequest > TILE_REQUEST_THROTTLE_MS) {
         requestVisibleTiles();
@@ -54,6 +95,8 @@ void Maps::drawUI() {
     lv_obj_align(main, LV_ALIGN_TOP_LEFT, 0, 0);
     lv_obj_set_style_pad_all(main, 0, LV_PART_MAIN);
     lv_obj_set_style_border_width(main, 0, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(main, lv_color_white(), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(main, LV_OPA_100, LV_PART_MAIN);
     lv_obj_clear_flag(main, LV_OBJ_FLAG_SCROLLABLE);
 
     // Map canvas - monochrome buffer
@@ -91,6 +134,16 @@ void Maps::drawUI() {
     lv_obj_set_size(_loading_spinner, 30, 30);
     lv_obj_align(_loading_spinner, LV_ALIGN_TOP_RIGHT, -5, 5);
     lv_obj_add_flag(_loading_spinner, LV_OBJ_FLAG_HIDDEN);
+
+    // Error label (hidden by default)
+    _error_label = lv_label_create(main);
+    lv_obj_set_width(_error_label, CANVAS_WIDTH - 20);
+    lv_obj_align(_error_label, LV_ALIGN_CENTER, 0, 0);
+    lv_label_set_long_mode(_error_label, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_align(_error_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+    lv_obj_set_style_text_font(_error_label, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_set_style_text_color(_error_label, lv_color_black(), LV_PART_MAIN);
+    lv_obj_add_flag(_error_label, LV_OBJ_FLAG_HIDDEN);
 
     // Search overlay (hidden by default)
     _search_overlay = lv_obj_create(main);
@@ -201,7 +254,27 @@ static void searchResultCallback(lv_event_t* e) {
     }
 }
 
+void Maps::showError(const char* msg) {
+    if (!_error_label) return;
+    lv_label_set_text(_error_label, msg);
+    lv_obj_clear_flag(_error_label, LV_OBJ_FLAG_HIDDEN);
+    if (_map_canvas) lv_obj_add_flag(_map_canvas, LV_OBJ_FLAG_HIDDEN);
+}
+
+void Maps::clearError() {
+    if (!_error_label) return;
+    lv_obj_add_flag(_error_label, LV_OBJ_FLAG_HIDDEN);
+    if (_map_canvas) lv_obj_clear_flag(_map_canvas, LV_OBJ_FLAG_HIDDEN);
+}
+
 bool Maps::findMapsServer() {
+    // Safety: ensure RnsService is fully initialized (it owns TrustedServers state)
+    RnsService* rns = _retos->fetchService<RnsService>();
+    if (!rns || rns->status() != RUNNING) {
+        Serial.println("[Maps] RnsService not ready");
+        return false;
+    }
+
     auto& trustedServers = Retcon::Service::getTrustedServers();
     auto servers = trustedServers.getTrustedServers();
 
@@ -360,7 +433,7 @@ void Maps::requestTile(uint8_t z, uint32_t x, uint32_t y) {
     }
 
     RnsService* rns = _retos->fetchService<RnsService>();
-    if (!rns) return;
+    if (!rns || rns->status() != RUNNING) return;
 
     // Show loading indicator
     lv_obj_clear_flag(_loading_spinner, LV_OBJ_FLAG_HIDDEN);
@@ -369,7 +442,10 @@ void Maps::requestTile(uint8_t z, uint32_t x, uint32_t y) {
     uint32_t requestId = (uint32_t)(millis() & 0xFFFFFFFF);
     _pendingTileRequests[key] = requestId;
 
-    rns->requestMapTile(_mapsServerHash, z, x, y, Retcon::Service::TileFormat::MONO_RLE);
+    RNS::Bytes serverHash = _mapsServerHash;
+    rns->queueAction([rns, serverHash, z, x, y]() {
+        rns->requestMapTile(serverHash, z, x, y, Retcon::Service::TileFormat::MONO_RLE);
+    });
 }
 
 void Maps::requestVisibleTiles() {
@@ -575,13 +651,17 @@ void Maps::performSearch(const std::string& query) {
     }
 
     RnsService* rns = _retos->fetchService<RnsService>();
-    if (!rns) return;
+    if (!rns || rns->status() != RUNNING) return;
 
     // Bias search near current map center
     int32_t biasLat = (int32_t)(_centerLat * 1e7);
     int32_t biasLon = (int32_t)(_centerLon * 1e7);
 
-    rns->requestGeocode(_mapsServerHash, query, biasLat, biasLon, true, 5);
+    RNS::Bytes serverHash = _mapsServerHash;
+    std::string queryCopy = query;
+    rns->queueAction([rns, serverHash, queryCopy, biasLat, biasLon]() {
+        rns->requestGeocode(serverHash, queryCopy, biasLat, biasLon, true, 5);
+    });
 
     // Show loading
     lv_obj_clean(_search_results_list);
@@ -639,14 +719,17 @@ void Maps::calculateRoute() {
     if (_mapsServerHash.size() == 0 && !findMapsServer()) return;
 
     RnsService* rns = _retos->fetchService<RnsService>();
-    if (!rns) return;
+    if (!rns || rns->status() != RUNNING) return;
 
     int32_t startLat = (int32_t)(_routeStart.lat * 1e7);
     int32_t startLon = (int32_t)(_routeStart.lon * 1e7);
     int32_t endLat = (int32_t)(_routeEnd.lat * 1e7);
     int32_t endLon = (int32_t)(_routeEnd.lon * 1e7);
 
-    rns->requestRoute(_mapsServerHash, startLat, startLon, endLat, endLon, Retcon::Service::TravelMode::WALK);
+    RNS::Bytes serverHash = _mapsServerHash;
+    rns->queueAction([rns, serverHash, startLat, startLon, endLat, endLon]() {
+        rns->requestRoute(serverHash, startLat, startLon, endLat, endLon, Retcon::Service::TravelMode::WALK);
+    });
 }
 
 void Maps::displayRoute(const Retcon::Service::MapRouteResponsePayload& response) {

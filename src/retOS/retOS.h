@@ -33,7 +33,7 @@ struct ServiceInfo {
     function<void()> applySettings;
 };
 
-static uint8_t id_counter = 1; 
+inline uint8_t id_counter = 1;
 
 // static so id should always be the same for the same template
 template<class T> AppInfo AppFactory(const char *name, const void* icon) {
@@ -112,14 +112,16 @@ protected:
     
 public:
 
-    template<class T> T* fetchService() { 
+    template<class T> T* fetchService() {
         ServiceInfo info = ServiceFactory<T>();
         const uint8_t sId = info.id;
 
         for(RetRunnable* service : _services) {
-            if(service->id() == sId) return (T*) service;
+            if(service->id() == sId) {
+                return (T*) service;
+            }
         }
-        // no sch service O.o
+        // no such service O.o
         return nullptr;
 
      };

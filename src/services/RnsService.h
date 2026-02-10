@@ -3,6 +3,8 @@
 
 #include <queue>
 #include <map>
+#include <functional>
+#include <vector>
 #include "retOS/PlatformMutex.h"
 #include "Reticulum.h"
 #include "Identity.h"
@@ -63,6 +65,10 @@ public:
     void requestNtpSync(const RNS::Bytes& serverHash);
     void requestSearch(const RNS::Bytes& serverHash, const std::string& query, bool aiSummary = false);
 
+    // Thread-safe action queue: UI thread pushes lambdas, services thread drains in tick().
+    // Use this for ALL calls from UI code into microReticulum (which is not thread-safe).
+    void queueAction(std::function<void()> action);
+
     // Maps service methods
     void requestMapTile(const RNS::Bytes& serverHash, uint8_t z, uint32_t x, uint32_t y,
                         Retcon::Service::TileFormat format = Retcon::Service::TileFormat::MONO_RLE);
@@ -115,8 +121,14 @@ protected:
 
     std::shared_ptr<RDeckAnnounceHandler> _announce_handler;
 
-    // Mutex to protect message state accessed from multiple tasks
     PlatformMutex _msg_mutex;
+
+    // Thread-safe action queue (UI thread → services thread)
+    // Rate-limited to avoid overwhelming Transport with rapid-fire sends
+    // (e.g., 9 tile requests queued at once from Maps).
+    static const size_t MAX_ACTIONS_PER_TICK = 3;
+    PlatformMutex _action_mutex;
+    std::vector<std::function<void()>> _pending_actions;
 
     boolean _sending_message = false;
     shared_ptr<Retcon::LXMF::Message> _current_sending_msg;

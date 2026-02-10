@@ -14,6 +14,11 @@ if platform.system() == "Linux":
     env.Append(CCFLAGS=["-pthread"])
     env.Append(LINKFLAGS=["-pthread"])
 
+# Forward sanitizer flags to linker (ASAN needs both compile + link)
+all_flags = " ".join(str(f) for f in env.get("BUILD_FLAGS", []))
+if "-fsanitize=address" in all_flags:
+    env.Append(LINKFLAGS=["-fsanitize=address"])
+
 # Add any additional platform-specific flags
 if platform.system() == "Darwin":  # macOS
     # macOS may need framework linking

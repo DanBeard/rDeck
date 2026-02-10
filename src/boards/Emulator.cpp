@@ -50,7 +50,10 @@ void register_ui_task(RetTask task) {
 void register_service_task(RetTask task) {
     printf("[Emulator] Starting services task on background thread\n");
     servicesThread = new std::thread([task]() {
-        task(nullptr);
+        // Catch all exceptions to prevent std::terminate on the detached thread
+        try {
+            task(nullptr);
+        } catch (...) {}
     });
     servicesThread->detach();
 }

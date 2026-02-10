@@ -202,7 +202,12 @@ void WebSearch::performSearch() {
     lv_label_set_text(_status_label, "Searching...");
     lv_obj_set_style_text_color(_status_label, lv_color_hex(0x888888), LV_PART_MAIN);
 
-    rns->requestSearch(searchServer->hash, query, _last_ai_summary);
+    RNS::Bytes serverHash = searchServer->hash;
+    std::string queryCopy = query;
+    bool aiSummary = _last_ai_summary;
+    rns->queueAction([rns, serverHash, queryCopy, aiSummary]() {
+        rns->requestSearch(serverHash, queryCopy, aiSummary);
+    });
 }
 
 void WebSearch::retrySearch() {
@@ -241,7 +246,12 @@ void WebSearch::retrySearch() {
     lv_label_set_text(_status_label, "Retrying...");
     lv_obj_set_style_text_color(_status_label, lv_color_hex(0x888888), LV_PART_MAIN);
 
-    rns->requestSearch(searchServer->hash, _last_query, _last_ai_summary);
+    RNS::Bytes serverHash = searchServer->hash;
+    std::string queryCopy = _last_query;
+    bool aiSummary = _last_ai_summary;
+    rns->queueAction([rns, serverHash, queryCopy, aiSummary]() {
+        rns->requestSearch(serverHash, queryCopy, aiSummary);
+    });
 }
 
 void WebSearch::displayResults(const Retcon::Service::SearchResponsePayload& response) {
