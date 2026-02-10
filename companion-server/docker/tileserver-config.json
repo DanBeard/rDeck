@@ -13,7 +13,7 @@
   },
   "styles": {
     "grayscale": {
-      "style": "grayscale-style.json",
+      "style": "config/grayscale-style.json",
       "tilejson": {
         "bounds": [-180, -85, 180, 85]
       }

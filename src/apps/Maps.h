@@ -110,8 +110,8 @@ protected:
 
     // Map state
     uint8_t _zoom = 14;  // Current zoom level (10-18)
-    double _centerLat = 37.7749;  // Default: San Francisco
-    double _centerLon = -122.4194;
+    double _centerLat = 41.8781;  // Default: Chicago
+    double _centerLon = -87.6298;
     int _pixelOffsetX = 0;  // Sub-tile pixel offset for smooth panning
     int _pixelOffsetY = 0;
 

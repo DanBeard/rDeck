@@ -43,5 +43,8 @@ services:
     volumes:
       - ./data/mbtiles:/data/mbtiles:ro
       - ./data/tileserver:/data/config:ro
-    command: --config /data/config/tileserver-config.json --verbose
+    entrypoint: /bin/sh
+    command: >
+      -c "ln -sf '/usr/src/app/node_modules/tileserver-gl-styles/fonts/Noto Sans Regular' '/data/Noto Sans Regular' &&
+          exec node /usr/src/app/ --config /data/config/tileserver-config.json --verbose"
     restart: unless-stopped
