@@ -180,16 +180,14 @@ class MapTileResponsePayload:
     """Payload for MAP_TILE_RESPONSE message.
 
     Server -> Device: Return map tile data
-    Supports chunking for large tiles over LoRa
+    Large payloads are transferred via Reticulum Resources automatically.
     """
 
     z: int
     x: int
     y: int
     format: TileFormat
-    chunk_index: int  # Current chunk (0-based)
-    total_chunks: int  # Total chunks for this tile
-    data: bytes  # RLE-compressed 1-bit tile data (chunk)
+    data: bytes  # RLE-compressed 1-bit tile data
     error: Optional[str] = None
 
 

@@ -42,7 +42,6 @@ except ImportError:
 
 # Constants
 TILE_SIZE = 128  # Downsampled tile size (from 256x256)
-MAX_CHUNK_SIZE = 200  # Max bytes per chunk over LoRa (conservative)
 
 
 def _rle_encode(data: bytes) -> bytes:
@@ -286,28 +285,27 @@ class MapsService(BaseService):
             logger.debug(f"MBTiles fetch failed for {z}/{x}/{y}: {e}")
             return None
 
-    def _handle_tile_request(self, payload: MapTileRequestPayload) -> list[MapTileResponsePayload]:
-        """Handle tile request - returns list of response chunks.
+    def _handle_tile_request(self, payload: MapTileRequestPayload) -> MapTileResponsePayload:
+        """Handle tile request - returns a single response payload.
 
         Tries tileserver-gl first (rendered vector tiles), falls back to MBTiles.
+        Large payloads are transferred via Reticulum Resources automatically.
 
         Args:
             payload: Tile request with z, x, y coordinates
 
         Returns:
-            List of tile response chunks (may be multiple for large tiles)
+            Tile response payload
         """
         z, x, y = payload.z, payload.x, payload.y
 
         if not PIL_AVAILABLE:
-            return [MapTileResponsePayload(
+            return MapTileResponsePayload(
                 z=z, x=x, y=y,
                 format=payload.format,
-                chunk_index=0,
-                total_chunks=1,
                 data=b"",
                 error="PIL not available for tile processing",
-            )]
+            )
 
         try:
             # Try tileserver first, then MBTiles
@@ -316,31 +314,30 @@ class MapsService(BaseService):
                 tile_data = self._fetch_tile_from_mbtiles(z, x, y)
 
             if tile_data is None:
-                return [MapTileResponsePayload(
+                return MapTileResponsePayload(
                     z=z, x=x, y=y,
                     format=payload.format,
-                    chunk_index=0,
-                    total_chunks=1,
                     data=b"",
                     error="Tile not found",
-                )]
+                )
 
             # Process tile: decode PNG, resize, dither, compress
             processed_data = self._process_tile(tile_data, payload.format)
 
-            # Split into chunks for LoRa transfer
-            return self._chunk_tile_response(z, x, y, payload.format, processed_data)
+            return MapTileResponsePayload(
+                z=z, x=x, y=y,
+                format=payload.format,
+                data=processed_data,
+            )
 
         except Exception as e:
             logger.exception(f"Tile request error: {e}")
-            return [MapTileResponsePayload(
+            return MapTileResponsePayload(
                 z=z, x=x, y=y,
                 format=payload.format,
-                chunk_index=0,
-                total_chunks=1,
                 data=b"",
                 error=str(e),
-            )]
+            )
 
     def _process_tile(self, tile_data: bytes, format: TileFormat) -> bytes:
         """Process raw tile data into 1-bit format.
@@ -372,49 +369,6 @@ class MapsService(BaseService):
             return _rle_encode(packed)
         else:
             return packed
-
-    def _chunk_tile_response(
-        self,
-        z: int,
-        x: int,
-        y: int,
-        format: TileFormat,
-        data: bytes
-    ) -> list[MapTileResponsePayload]:
-        """Split tile data into chunks for transmission.
-
-        Args:
-            z, x, y: Tile coordinates
-            format: Tile format
-            data: Processed tile data
-
-        Returns:
-            List of response chunks
-        """
-        if len(data) <= MAX_CHUNK_SIZE:
-            return [MapTileResponsePayload(
-                z=z, x=x, y=y,
-                format=format,
-                chunk_index=0,
-                total_chunks=1,
-                data=data,
-            )]
-
-        chunks = []
-        total_chunks = (len(data) + MAX_CHUNK_SIZE - 1) // MAX_CHUNK_SIZE
-
-        for i in range(total_chunks):
-            start = i * MAX_CHUNK_SIZE
-            end = min(start + MAX_CHUNK_SIZE, len(data))
-            chunks.append(MapTileResponsePayload(
-                z=z, x=x, y=y,
-                format=format,
-                chunk_index=i,
-                total_chunks=total_chunks,
-                data=data[start:end],
-            ))
-
-        return chunks
 
     def _handle_route_request(self, payload: MapRouteRequestPayload) -> MapRouteResponsePayload:
         """Handle routing request via Valhalla.
@@ -476,6 +430,19 @@ class MapsService(BaseService):
                 error=str(e),
             )
 
+    VALHALLA_MANEUVER_TYPES = {
+        0: "none", 1: "start", 2: "start-right", 3: "start-left",
+        4: "destination", 5: "destination-right", 6: "destination-left",
+        7: "becomes", 8: "continue", 9: "turn-slight-right",
+        10: "turn-right", 11: "turn-sharp-right", 12: "u-turn-right",
+        13: "u-turn-left", 14: "turn-sharp-left", 15: "turn-left",
+        16: "turn-slight-left", 17: "ramp-straight", 18: "ramp-right",
+        19: "ramp-left", 20: "exit-right", 21: "exit-left",
+        22: "stay-straight", 23: "stay-right", 24: "stay-left",
+        25: "merge", 26: "roundabout-enter", 27: "roundabout-exit",
+        28: "ferry-enter", 29: "ferry-exit",
+    }
+
     def _parse_valhalla_response(self, data: dict) -> MapRouteResponsePayload:
         """Parse Valhalla response into our format.
 
@@ -507,7 +474,7 @@ class MapsService(BaseService):
                 for maneuver in leg.get("maneuvers", []):
                     instructions.append(MapRouteInstruction(
                         distance_m=int(maneuver.get("length", 0) * 1000),  # km to m
-                        maneuver=maneuver.get("type", 0),  # Valhalla maneuver type
+                        maneuver=self.VALHALLA_MANEUVER_TYPES.get(maneuver.get("type", 0), "continue"),
                         street=maneuver.get("street_names", [""])[0] if maneuver.get("street_names") else "",
                     ))
 
@@ -562,6 +529,26 @@ class MapsService(BaseService):
 
         return decoded
 
+    # Max bytes for the geocode service payload (msgpack-encoded).
+    # microReticulum lacks Resource support, so the full LXMF message
+    # must fit in a single link packet.  LXMF LINK_PACKET_MAX_CONTENT
+    # = 319 bytes; packed_payload overhead (array header + timestamp +
+    # empty title/content + service fields keys) ≈ 61 bytes, leaving
+    # ~274 bytes for the geocode payload.  Use 270 for safety margin.
+    MAX_GEOCODE_PAYLOAD_BYTES = 270
+
+    @staticmethod
+    def _truncate_display_name(name: str, max_len: int = 50) -> str:
+        """Truncate at a comma boundary to keep names readable."""
+        if len(name) <= max_len:
+            return name
+        # Find the last comma before the limit
+        truncated = name[:max_len]
+        last_comma = truncated.rfind(",")
+        if last_comma > 15:  # keep at least 15 chars
+            return truncated[:last_comma]
+        return truncated.rstrip() + "..."
+
     def _handle_geocode_request(self, payload: MapGeocodeRequestPayload) -> MapGeocodeResponsePayload:
         """Handle geocoding request via Nominatim.
 
@@ -580,10 +567,13 @@ class MapsService(BaseService):
             )
 
         try:
+            # Cap results to keep response within single link packet
+            max_results = min(payload.max_results, 3)
+
             params = {
                 "q": payload.query,
                 "format": "json",
-                "limit": payload.max_results,
+                "limit": max_results,
                 "addressdetails": 1,
             }
 
@@ -604,13 +594,31 @@ class MapsService(BaseService):
             data = response.json()
 
             results = []
-            for item in data[:payload.max_results]:
+            for item in data[:max_results]:
                 results.append(MapGeocodeResult(
-                    display_name=item.get("display_name", ""),
+                    display_name=self._truncate_display_name(
+                        item.get("display_name", "")
+                    ),
                     lat=int(float(item.get("lat", 0)) * 1e7),
                     lon=int(float(item.get("lon", 0)) * 1e7),
-                    type=item.get("type", ""),
+                    type=item.get("type", "")[:12],
                 ))
+
+            # Verify encoded payload fits in a single link packet.
+            # Progressively drop results if it's too large.
+            import msgpack
+            while len(results) > 0:
+                trial = {
+                    "query": payload.query,
+                    "results": [
+                        {"display_name": r.display_name, "lat": r.lat,
+                         "lon": r.lon, "type": r.type}
+                        for r in results
+                    ],
+                }
+                if len(msgpack.packb(trial, use_bin_type=True)) <= self.MAX_GEOCODE_PAYLOAD_BYTES:
+                    break
+                results.pop()  # drop last result to fit
 
             return MapGeocodeResponsePayload(
                 query=payload.query,

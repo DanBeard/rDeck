@@ -357,8 +357,6 @@ void test_map_tile_response_serialize_deserialize(void) {
     original.x = 2746;
     original.y = 6327;
     original.format = TileFormat::MONO_RLE;
-    original.chunk_index = 0;
-    original.total_chunks = 3;
     original.data = {0x01, 0xFF, 0x02, 0x00, 0x03, 0xAA};  // Sample RLE data
 
     uint8_t buffer[256];
@@ -371,8 +369,6 @@ void test_map_tile_response_serialize_deserialize(void) {
     TEST_ASSERT_EQUAL(2746, decoded.x);
     TEST_ASSERT_EQUAL(6327, decoded.y);
     TEST_ASSERT_EQUAL(TileFormat::MONO_RLE, decoded.format);
-    TEST_ASSERT_EQUAL(0, decoded.chunk_index);
-    TEST_ASSERT_EQUAL(3, decoded.total_chunks);
     TEST_ASSERT_EQUAL(6, decoded.data.size());
     TEST_ASSERT_EQUAL(0x01, decoded.data[0]);
     TEST_ASSERT_EQUAL(0xAA, decoded.data[5]);
@@ -384,8 +380,6 @@ void test_map_tile_response_with_error(void) {
     original.x = 9999;
     original.y = 9999;
     original.format = TileFormat::MONO_RLE;
-    original.chunk_index = 0;
-    original.total_chunks = 1;
     original.error = "Tile not found";
 
     uint8_t buffer[256];

@@ -338,8 +338,6 @@ class TestMapsProtocol:
                 x=8529,
                 y=5975,
                 format=TileFormat.MONO_RLE,
-                chunk_index=0,
-                total_chunks=1,
                 data=test_tile_data,
                 error=None,
             ),
@@ -353,8 +351,6 @@ class TestMapsProtocol:
         assert decoded_response.payload.z == 14
         assert decoded_response.payload.x == 8529
         assert decoded_response.payload.y == 5975
-        assert decoded_response.payload.chunk_index == 0
-        assert decoded_response.payload.total_chunks == 1
         assert decoded_response.payload.data == test_tile_data
         assert decoded_response.payload.error is None
 
@@ -379,8 +375,6 @@ class TestMapsProtocol:
                 x=8529,
                 y=5975,
                 format=TileFormat.MONO_RLE,
-                chunk_index=0,
-                total_chunks=0,
                 data=b"",
                 error="Tile not found",
             ),
@@ -703,7 +697,7 @@ class TestProtocolCompatibility:
             # Map tile messages
             (MessageType.MAP_TILE_REQUEST, "maps", MapTileRequestPayload(14, 8529, 5975, TileFormat.MONO_RLE)),
             (MessageType.MAP_TILE_RESPONSE, "maps", MapTileResponsePayload(
-                14, 8529, 5975, TileFormat.MONO_RLE, 0, 1, b"\x00\xFF", None
+                14, 8529, 5975, TileFormat.MONO_RLE, b"\x00\xFF", None
             )),
             # Map route messages
             (MessageType.MAP_ROUTE_REQUEST, "maps", MapRouteRequestPayload(
@@ -837,18 +831,14 @@ class TestTileserverIntegration:
         mock_response.raise_for_status = Mock()
 
         with patch.object(service._http_client, 'get', return_value=mock_response):
-            responses = service.handle_request(
+            response = service.handle_request(
                 MapTileRequestPayload(z=10, x=512, y=512, format=TileFormat.MONO_RLE),
                 MessageType.MAP_TILE_REQUEST,
             )
 
-        # Should get back processed tile data (dithered, chunked)
-        assert len(responses) >= 1
-        assert responses[0].error is None
-        assert len(responses[0].data) > 0
-        # Reassemble all chunks
-        full_data = b"".join(r.data for r in responses)
-        assert len(full_data) > 0
+        # Should get back processed tile data (dithered)
+        assert response.error is None
+        assert len(response.data) > 0
 
         service.close()
 
@@ -881,14 +871,13 @@ class TestTileserverIntegration:
 
         # Tileserver returns None (connection refused)
         with patch.object(service, '_fetch_tile_from_tileserver', return_value=None):
-            responses = service.handle_request(
+            response = service.handle_request(
                 MapTileRequestPayload(z=10, x=512, y=512, format=TileFormat.MONO_RLE),
                 MessageType.MAP_TILE_REQUEST,
             )
 
-        assert len(responses) >= 1
-        assert responses[0].error is None
-        assert len(responses[0].data) > 0
+        assert response.error is None
+        assert len(response.data) > 0
 
         service.close()
 

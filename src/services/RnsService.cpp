@@ -5,6 +5,7 @@
 #include "RnsUtils/LoraInterface.h"
 #include "RnsUtils/TCPClientInterface.h"
 #include "Bytes.h"
+#include "Resource.h"
 #include "apps/Settings.h"
 #include "RnsUtils/LXMFData.h"
 #include <iterator>
@@ -81,11 +82,25 @@ static void onLinkPacket(const RNS::Bytes& plaintext, const RNS::Packet& packet)
     retOsGlobalPtr->publishEvent(e);
 
 }
+static void onResourceConcluded(const RNS::Resource& resource) {
+    Serial.println("[RNS] *** Resource transfer concluded ***");
+    if (resource.status() == RNS::Type::Resource::COMPLETE) {
+        Serial.printf("[RNS] Resource complete, data size: %zu\n", resource.data().size());
+        // The resource data IS the packed LXMF bytes - feed it into the same handler
+        // Create a dummy packet since onLinkPacket needs one (but only uses plaintext)
+        onLinkPacket(resource.data(), RNS::Packet(RNS::Type::NONE));
+    } else {
+        Serial.printf("[RNS] Resource failed with status: %d\n", (int)resource.status());
+    }
+}
+
 static void onLink(RNS::Link& link) {
     rnsService->reticulum.should_persist_data();
     Serial.println("[RNS] *** LINK ESTABLISHED ***");
     Serial.printf("[RNS] Link from: %s\n", link.destination().hash().toHex().c_str());
     link.set_packet_callback(onLinkPacket);
+    link.set_resource_strategy(RNS::Type::Link::ACCEPT_ALL);
+    link.set_resource_concluded_callback(onResourceConcluded);
 }
 
 void RnsService::start(RetOS* retos){
@@ -813,9 +828,6 @@ void RnsService::requestMapTile(const RNS::Bytes& serverHash, uint8_t z, uint32_
     msg.payload.assign(payloadBuf, payloadLen);
     msg.request_id = requestId;
 
-    // Store pending tile info for chunk reassembly
-    _pending_tiles[requestId] = {z, x, y, format, 0, {}};
-
     sendServiceMessage(serverHash, msg);
     Serial.printf("[Service] Sent MAP_TILE_REQUEST z=%d x=%u y=%u\n", z, x, y);
 }
@@ -1014,66 +1026,21 @@ void RnsService::handleSearchResponse(const Retcon::Service::SearchResponsePaylo
 // ============================================================================
 
 void RnsService::handleMapTileResponse(const Retcon::Service::MapTileResponsePayload& payload, uint32_t requestId) {
-    Serial.printf("[Service] Received MAP_TILE_RESPONSE z=%d x=%u y=%u chunk %d/%d\n",
-                  payload.z, payload.x, payload.y, payload.chunk_index + 1, payload.total_chunks);
+    Serial.printf("[Service] Received MAP_TILE_RESPONSE z=%d x=%u y=%u (%zu bytes)\n",
+                  payload.z, payload.x, payload.y, payload.data.size());
 
     if (!payload.error.empty()) {
         Serial.printf("[Service] Tile error: %s\n", payload.error.c_str());
-        _pending_tiles.erase(requestId);
-
-        // Send error event
-        Event e;
-        e.src = this;
-        e.type = EventType::MAP_TILE_RECEIVED;
-        auto errorPayload = std::make_shared<Retcon::Service::MapTileResponsePayload>(payload);
-        e.data = errorPayload;
-        _retos->publishEvent(e);
-        return;
     }
 
-    // Find or create pending tile entry
-    auto it = _pending_tiles.find(requestId);
-    if (it == _pending_tiles.end()) {
-        // First chunk - create entry
-        _pending_tiles[requestId] = {payload.z, payload.x, payload.y, payload.format, payload.total_chunks, {}};
-        it = _pending_tiles.find(requestId);
-    }
-
-    // Store this chunk
-    it->second.chunks[payload.chunk_index] = payload.data;
-
-    // Check if we have all chunks
-    if (it->second.chunks.size() == payload.total_chunks) {
-        // Reassemble tile data
-        std::vector<uint8_t> fullData;
-        for (uint16_t i = 0; i < payload.total_chunks; i++) {
-            const auto& chunk = it->second.chunks[i];
-            fullData.insert(fullData.end(), chunk.begin(), chunk.end());
-        }
-
-        // Create complete response payload
-        Retcon::Service::MapTileResponsePayload completePayload;
-        completePayload.z = it->second.z;
-        completePayload.x = it->second.x;
-        completePayload.y = it->second.y;
-        completePayload.format = it->second.format;
-        completePayload.chunk_index = 0;
-        completePayload.total_chunks = 1;
-        completePayload.data = fullData;
-
-        // Remove from pending
-        _pending_tiles.erase(requestId);
-
-        // Send event with complete tile
-        Event e;
-        e.src = this;
-        e.type = EventType::MAP_TILE_RECEIVED;
-        auto results = std::make_shared<Retcon::Service::MapTileResponsePayload>(completePayload);
-        e.data = results;
-        _retos->publishEvent(e);
-
-        Serial.printf("[Service] Tile complete: %zu bytes\n", fullData.size());
-    }
+    // Publish tile event directly — no reassembly needed,
+    // large payloads arrive complete via Reticulum Resources.
+    Event e;
+    e.src = this;
+    e.type = EventType::MAP_TILE_RECEIVED;
+    auto results = std::make_shared<Retcon::Service::MapTileResponsePayload>(payload);
+    e.data = results;
+    _retos->publishEvent(e);
 }
 
 void RnsService::handleRouteResponse(const Retcon::Service::MapRouteResponsePayload& payload, uint32_t requestId) {

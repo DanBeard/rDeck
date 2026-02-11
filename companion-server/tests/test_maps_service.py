@@ -90,8 +90,6 @@ class TestMapTilePayloads:
             x=2746,
             y=6327,
             format=TileFormat.MONO_RLE,
-            chunk_index=0,
-            total_chunks=3,
             data=bytes([0x01, 0xFF, 0x02, 0x00]),
         )
 
@@ -101,15 +99,12 @@ class TestMapTilePayloads:
         assert decoded.z == 14
         assert decoded.x == 2746
         assert decoded.y == 6327
-        assert decoded.chunk_index == 0
-        assert decoded.total_chunks == 3
         assert decoded.data == bytes([0x01, 0xFF, 0x02, 0x00])
 
     def test_tile_response_with_error(self):
         original = MapTileResponsePayload(
             z=14, x=9999, y=9999,
             format=TileFormat.MONO_RLE,
-            chunk_index=0, total_chunks=1,
             data=b"",
             error="Tile not found"
         )
@@ -257,6 +252,7 @@ class TestMapsService:
         config.maps_mbtiles_path = None  # No MBTiles for basic tests
         config.maps_valhalla_url = None
         config.maps_nominatim_url = None
+        config.maps_tileserver_url = None
         return config
 
     @pytest.fixture
@@ -668,13 +664,13 @@ class TestTileFallbackLogic:
             with patch.object(svc, '_fetch_tile_from_tileserver', return_value=None):
                 with patch.object(svc, '_fetch_tile_from_mbtiles', return_value=b"tile_data") as mock_mbtiles:
                     with patch.object(svc, '_process_tile', return_value=b"processed") as mock_process:
-                        responses = svc._handle_tile_request(
+                        response = svc._handle_tile_request(
                             MapTileRequestPayload(z=10, x=512, y=512, format=TileFormat.MONO_RLE)
                         )
 
         mock_mbtiles.assert_called_once_with(10, 512, 512)
         mock_process.assert_called_once_with(b"tile_data", TileFormat.MONO_RLE)
-        assert responses[0].error is None
+        assert response.error is None
 
     def test_tileserver_success_skips_mbtiles(self):
         """When tileserver succeeds, should not query MBTiles."""
@@ -690,12 +686,12 @@ class TestTileFallbackLogic:
             with patch.object(svc, '_fetch_tile_from_tileserver', return_value=fake_png):
                 with patch.object(svc, '_fetch_tile_from_mbtiles') as mock_mbtiles:
                     with patch.object(svc, '_process_tile', return_value=b"processed"):
-                        responses = svc._handle_tile_request(
+                        response = svc._handle_tile_request(
                             MapTileRequestPayload(z=10, x=512, y=512, format=TileFormat.MONO_RLE)
                         )
 
         mock_mbtiles.assert_not_called()
-        assert responses[0].error is None
+        assert response.error is None
 
     def test_both_sources_fail_returns_error(self):
         """When both tileserver and MBTiles fail, should return error."""
@@ -709,12 +705,11 @@ class TestTileFallbackLogic:
         with patch('companion_server.services.maps_service.PIL_AVAILABLE', True):
             with patch.object(svc, '_fetch_tile_from_tileserver', return_value=None):
                 with patch.object(svc, '_fetch_tile_from_mbtiles', return_value=None):
-                    responses = svc._handle_tile_request(
+                    response = svc._handle_tile_request(
                         MapTileRequestPayload(z=10, x=999, y=999, format=TileFormat.MONO_RLE)
                     )
 
-        assert len(responses) == 1
-        assert responses[0].error == "Tile not found"
+        assert response.error == "Tile not found"
 
     def test_no_pil_returns_error(self):
         """Without PIL, should return error before any fetch."""
@@ -726,12 +721,11 @@ class TestTileFallbackLogic:
         svc = MapsService(config)
 
         with patch('companion_server.services.maps_service.PIL_AVAILABLE', False):
-            responses = svc._handle_tile_request(
+            response = svc._handle_tile_request(
                 MapTileRequestPayload(z=10, x=512, y=512, format=TileFormat.MONO_RLE)
             )
 
-        assert len(responses) == 1
-        assert "PIL" in responses[0].error
+        assert "PIL" in response.error
 
     def test_tileserver_only_no_mbtiles(self):
         """Service with only tileserver (no MBTiles) should work."""
@@ -746,12 +740,12 @@ class TestTileFallbackLogic:
         with patch('companion_server.services.maps_service.PIL_AVAILABLE', True):
             with patch.object(svc, '_fetch_tile_from_tileserver', return_value=fake_png):
                 with patch.object(svc, '_process_tile', return_value=b"processed"):
-                    responses = svc._handle_tile_request(
+                    response = svc._handle_tile_request(
                         MapTileRequestPayload(z=10, x=512, y=512, format=TileFormat.MONO_RLE)
                     )
 
-        assert responses[0].error is None
-        assert responses[0].data == b"processed"
+        assert response.error is None
+        assert response.data == b"processed"
 
     def test_process_tile_exception_returns_error(self):
         """Exception during tile processing should return error, not crash."""
@@ -765,9 +759,8 @@ class TestTileFallbackLogic:
         with patch('companion_server.services.maps_service.PIL_AVAILABLE', True):
             with patch.object(svc, '_fetch_tile_from_tileserver', return_value=b"bad data"):
                 with patch.object(svc, '_process_tile', side_effect=Exception("decode error")):
-                    responses = svc._handle_tile_request(
+                    response = svc._handle_tile_request(
                         MapTileRequestPayload(z=10, x=512, y=512, format=TileFormat.MONO_RLE)
                     )
 
-        assert len(responses) == 1
-        assert "decode error" in responses[0].error
+        assert "decode error" in response.error

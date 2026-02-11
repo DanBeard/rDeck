@@ -167,17 +167,6 @@ protected:
     };
     std::map<uint32_t, PendingSearch> _pending_searches;
 
-    // Maps state - tile chunk assembly
-    struct PendingTile {
-        uint8_t z;
-        uint32_t x;
-        uint32_t y;
-        Retcon::Service::TileFormat format;
-        uint16_t total_chunks;
-        std::map<uint16_t, std::vector<uint8_t>> chunks;  // chunk_index -> data
-    };
-    std::map<uint32_t, PendingTile> _pending_tiles;  // request_id -> pending tile
-
     struct PendingRoute {
         uint32_t request_id;
     };

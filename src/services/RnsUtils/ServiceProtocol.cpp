@@ -188,8 +188,6 @@ void MapTileResponsePayload::deserialize(const uint8_t* dataPtr, size_t len) {
     x = doc["x"] | 0;
     y = doc["y"] | 0;
     format = static_cast<TileFormat>(doc["format"] | 0);
-    chunk_index = doc["chunk_index"] | 0;
-    total_chunks = doc["total_chunks"] | 1;
     error = safeGetString(doc["error"]);
 
     data.clear();
@@ -206,8 +204,6 @@ size_t MapTileResponsePayload::serialize(uint8_t* buffer, size_t maxLen) const {
     doc["x"] = x;
     doc["y"] = y;
     doc["format"] = static_cast<uint8_t>(format);
-    doc["chunk_index"] = chunk_index;
-    doc["total_chunks"] = total_chunks;
     if (!error.empty()) {
         doc["error"] = error;
     }

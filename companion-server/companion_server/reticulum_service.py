@@ -425,24 +425,22 @@ class ReticulumService:
             if msg.msg_type == MessageType.MAP_TILE_REQUEST:
                 payload: MapTileRequestPayload = msg.payload
                 self._log(f"[Maps] '{device_name}' requesting tile z={payload.z} x={payload.x} y={payload.y}")
-                responses = self._maps_service._handle_tile_request(payload)
-                # Tile responses may be chunked
-                for response in responses:
-                    self._send_service_message(
-                        source_hash,
-                        ServiceMessage(
-                            msg_type=MessageType.MAP_TILE_RESPONSE,
-                            service="maps",
-                            payload=response,
-                            request_id=msg.request_id,
-                        ),
-                    )
-                if responses and responses[0].error:
-                    self._log(f"[Maps] Tile error for '{device_name}': {responses[0].error}")
-                    self._fire_service_event("maps", "error", device_name, f"Tile z={payload.z} x={payload.x} y={payload.y} - {responses[0].error}")
+                response = self._maps_service._handle_tile_request(payload)
+                self._send_service_message(
+                    source_hash,
+                    ServiceMessage(
+                        msg_type=MessageType.MAP_TILE_RESPONSE,
+                        service="maps",
+                        payload=response,
+                        request_id=msg.request_id,
+                    ),
+                )
+                if response.error:
+                    self._log(f"[Maps] Tile error for '{device_name}': {response.error}")
+                    self._fire_service_event("maps", "error", device_name, f"Tile z={payload.z} x={payload.x} y={payload.y} - {response.error}")
                 else:
-                    self._log(f"[Maps] Sent tile ({len(responses)} chunks) to '{device_name}'")
-                    self._fire_service_event("maps", "response", device_name, f"Tile z={payload.z} x={payload.x} y={payload.y} ({len(responses)} chunks)")
+                    self._log(f"[Maps] Sent tile to '{device_name}'")
+                    self._fire_service_event("maps", "response", device_name, f"Tile z={payload.z} x={payload.x} y={payload.y}")
 
             elif msg.msg_type == MessageType.MAP_ROUTE_REQUEST:
                 payload: MapRouteRequestPayload = msg.payload

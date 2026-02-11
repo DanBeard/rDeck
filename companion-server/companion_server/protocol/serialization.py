@@ -126,8 +126,6 @@ def _encode_payload(msg_type: MessageType, payload: Any) -> bytes:
             "x": p.x,
             "y": p.y,
             "format": int(p.format),
-            "chunk_index": p.chunk_index,
-            "total_chunks": p.total_chunks,
             "data": p.data,
         }
         if p.error:
@@ -244,8 +242,6 @@ def _decode_payload(msg_type: MessageType, payload_bytes: bytes) -> Any:
             x=data.get("x", 0),
             y=data.get("y", 0),
             format=TileFormat(data.get("format", 0)),
-            chunk_index=data.get("chunk_index", 0),
-            total_chunks=data.get("total_chunks", 1),
             data=data.get("data", b""),
             error=data.get("error"),
         )

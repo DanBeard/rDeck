@@ -163,16 +163,14 @@ struct MapTileRequestPayload {
 
 /**
  * Map tile response payload - Server -> Device
- * Supports chunking for large tiles over LoRa
+ * Large payloads are transferred via Reticulum Resources automatically.
  */
 struct MapTileResponsePayload {
     uint8_t z;
     uint32_t x;
     uint32_t y;
     TileFormat format;
-    uint16_t chunk_index;       // Current chunk (0-based)
-    uint16_t total_chunks;      // Total chunks for this tile
-    std::vector<uint8_t> data;  // RLE-compressed 1-bit tile data (chunk)
+    std::vector<uint8_t> data;  // RLE-compressed 1-bit tile data
     std::string error;          // Error message if failed
 
     void deserialize(const uint8_t* data, size_t len);

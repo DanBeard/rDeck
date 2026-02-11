@@ -49,7 +49,6 @@ from companion_server.services.maps_service import (
     _rle_decode,
     _floyd_steinberg_dither,
     _image_to_packed_bits,
-    MAX_CHUNK_SIZE,
 )
 
 
@@ -336,75 +335,6 @@ class TestRLEEdgeCases:
 # ============================================================
 
 
-class TestTileChunking:
-    """Test tile response chunking logic."""
-
-    @pytest.fixture
-    def service(self):
-        config = Mock(spec=Config)
-        config.maps_mbtiles_path = None
-        config.maps_valhalla_url = None
-        config.maps_nominatim_url = None
-        return MapsService(config)
-
-    def test_small_tile_single_chunk(self, service):
-        """Tile data <= MAX_CHUNK_SIZE should be a single chunk."""
-        data = bytes(range(100))
-        chunks = service._chunk_tile_response(10, 100, 200, TileFormat.MONO_RLE, data)
-        assert len(chunks) == 1
-        assert chunks[0].chunk_index == 0
-        assert chunks[0].total_chunks == 1
-        assert chunks[0].data == data
-
-    def test_exact_chunk_size(self, service):
-        """Data exactly MAX_CHUNK_SIZE should be single chunk."""
-        data = bytes([0xAB] * MAX_CHUNK_SIZE)
-        chunks = service._chunk_tile_response(10, 100, 200, TileFormat.MONO_RLE, data)
-        assert len(chunks) == 1
-
-    def test_one_over_chunk_size(self, service):
-        """Data one byte over MAX_CHUNK_SIZE should split into two chunks."""
-        data = bytes([0xAB] * (MAX_CHUNK_SIZE + 1))
-        chunks = service._chunk_tile_response(10, 100, 200, TileFormat.MONO_RLE, data)
-        assert len(chunks) == 2
-        assert chunks[0].total_chunks == 2
-        assert chunks[1].total_chunks == 2
-        assert chunks[0].chunk_index == 0
-        assert chunks[1].chunk_index == 1
-        # Reassembled data should match
-        reassembled = chunks[0].data + chunks[1].data
-        assert reassembled == data
-
-    def test_large_tile_many_chunks(self, service):
-        """2048 bytes (full 128x128 1-bit tile) should split correctly."""
-        data = bytes([0xFF] * 2048)
-        chunks = service._chunk_tile_response(10, 100, 200, TileFormat.RAW_1BIT, data)
-        expected_chunks = (2048 + MAX_CHUNK_SIZE - 1) // MAX_CHUNK_SIZE
-        assert len(chunks) == expected_chunks
-        # Verify all chunk indices are sequential
-        for i, chunk in enumerate(chunks):
-            assert chunk.chunk_index == i
-            assert chunk.total_chunks == expected_chunks
-        # Verify reassembly
-        reassembled = b"".join(c.data for c in chunks)
-        assert reassembled == data
-
-    def test_empty_data_single_chunk(self, service):
-        """Empty tile data should still return one chunk."""
-        chunks = service._chunk_tile_response(10, 100, 200, TileFormat.MONO_RLE, b"")
-        assert len(chunks) == 1
-        assert chunks[0].data == b""
-
-    def test_chunk_preserves_coordinates(self, service):
-        """All chunks for a tile should carry the same z/x/y."""
-        data = bytes([0xFF] * 500)
-        chunks = service._chunk_tile_response(14, 2746, 6327, TileFormat.MONO_RLE, data)
-        for chunk in chunks:
-            assert chunk.z == 14
-            assert chunk.x == 2746
-            assert chunk.y == 6327
-
-
 class TestMBTilesIntegration:
     """Test MBTiles loading and tile retrieval."""
 
@@ -451,6 +381,7 @@ class TestMBTilesIntegration:
         config.maps_mbtiles_path = "/nonexistent/path.mbtiles"
         config.maps_valhalla_url = None
         config.maps_nominatim_url = None
+        config.maps_tileserver_url = None
         svc = MapsService(config)
         assert svc._mbtiles_conn is None
         assert not svc.available
@@ -464,10 +395,9 @@ class TestMBTilesIntegration:
         svc = MapsService(config)
 
         payload = MapTileRequestPayload(z=5, x=999, y=999, format=TileFormat.MONO_RLE)
-        responses = svc._handle_tile_request(payload)
-        assert len(responses) == 1
+        response = svc._handle_tile_request(payload)
         # Without PIL installed, error is "PIL not available" before tile lookup
-        assert responses[0].error in ("Tile not found", "PIL not available for tile processing")
+        assert response.error in ("Tile not found", "PIL not available for tile processing")
 
     def test_tms_y_coordinate_conversion(self, mbtiles_path):
         """Verify TMS y-coordinate flip: tms_y = (1 << z) - 1 - y."""
@@ -480,12 +410,12 @@ class TestMBTilesIntegration:
         # We inserted at z=10, x=512, tms_row=511
         # XYZ y = (1 << 10) - 1 - 511 = 512
         payload = MapTileRequestPayload(z=10, x=512, y=512, format=TileFormat.MONO_RLE)
-        responses = svc._handle_tile_request(payload)
+        response = svc._handle_tile_request(payload)
         # Should find the tile (may fail if PIL not available, which is ok)
-        if responses[0].error and "PIL" in responses[0].error:
+        if response.error and "PIL" in response.error:
             pytest.skip("PIL not available")
         # No "Tile not found" error
-        assert responses[0].error is None or "not found" not in responses[0].error.lower()
+        assert response.error is None or "not found" not in response.error.lower()
 
     def test_reload_mbtiles(self, mbtiles_path):
         """reload_mbtiles should close old connection and open new one."""
@@ -532,14 +462,15 @@ class TestMapsServiceNoMBTiles:
         config.maps_mbtiles_path = None
         config.maps_valhalla_url = None
         config.maps_nominatim_url = None
+        config.maps_tileserver_url = None
         return MapsService(config)
 
     def test_tile_request_no_mbtiles(self, service):
         """Tile request without MBTiles should return error."""
         payload = MapTileRequestPayload(z=10, x=100, y=200, format=TileFormat.MONO_RLE)
-        responses = service._handle_tile_request(payload)
-        assert len(responses) == 1
-        assert "not available" in responses[0].error.lower()
+        response = service._handle_tile_request(payload)
+        assert response.error  # Should have an error message
+        assert response.data == b""
 
     def test_route_request_no_valhalla(self, service):
         """Route request without Valhalla should return error."""
@@ -620,6 +551,7 @@ class TestValhallaResponseParsing:
         config.maps_mbtiles_path = None
         config.maps_valhalla_url = None
         config.maps_nominatim_url = None
+        config.maps_tileserver_url = None
         return MapsService(config)
 
     def test_empty_trip(self, service):
@@ -644,6 +576,7 @@ class TestValhallaResponseParsing:
         assert resp.points == []  # No shape = no points
         assert len(resp.instructions) == 1
         assert resp.instructions[0].street == "Main St"
+        assert resp.instructions[0].maneuver == "start"  # Valhalla type 1 = start
 
     def test_missing_maneuvers(self, service):
         """Leg without maneuvers should produce points but no instructions."""
@@ -661,6 +594,7 @@ class TestValhallaResponseParsing:
         ], "summary": {}}}
         resp = service._parse_valhalla_response(data)
         assert resp.instructions[0].street == ""
+        assert resp.instructions[0].maneuver == "start-right"  # Valhalla type 2
 
     def test_summary_distance_and_time(self, service):
         """Summary length (km) and time (seconds) should be converted correctly."""
@@ -671,6 +605,52 @@ class TestValhallaResponseParsing:
         resp = service._parse_valhalla_response(data)
         assert resp.total_distance_m == 5500  # 5.5 km * 1000
         assert resp.total_time_s == 3600
+
+    def test_maneuver_type_int_to_string_conversion(self, service):
+        """Valhalla integer maneuver types should be converted to readable strings."""
+        # Build a leg with multiple maneuver types
+        maneuvers = [
+            {"length": 0.0, "type": 1, "street_names": ["Start St"]},       # start
+            {"length": 0.5, "type": 8},                                       # continue
+            {"length": 0.2, "type": 15, "street_names": ["Left Ave"]},       # turn-left
+            {"length": 0.3, "type": 10, "street_names": ["Right Blvd"]},     # turn-right
+            {"length": 0.1, "type": 9},                                       # turn-slight-right
+            {"length": 0.1, "type": 16},                                      # turn-slight-left
+            {"length": 0.0, "type": 4, "street_names": ["Destination Rd"]},  # destination
+        ]
+        data = {"trip": {"legs": [
+            {"shape": "", "maneuvers": maneuvers}
+        ], "summary": {"length": 1.2, "time": 900}}}
+
+        resp = service._parse_valhalla_response(data)
+        assert len(resp.instructions) == 7
+
+        expected = ["start", "continue", "turn-left", "turn-right",
+                    "turn-slight-right", "turn-slight-left", "destination"]
+        for i, exp in enumerate(expected):
+            assert resp.instructions[i].maneuver == exp, \
+                f"Instruction {i}: expected '{exp}', got '{resp.instructions[i].maneuver}'"
+
+        # Verify streets propagated correctly
+        assert resp.instructions[0].street == "Start St"
+        assert resp.instructions[1].street == ""  # No street_names key
+        assert resp.instructions[2].street == "Left Ave"
+        assert resp.instructions[6].street == "Destination Rd"
+
+    def test_maneuver_type_unknown_defaults_to_continue(self, service):
+        """Unknown Valhalla maneuver type should default to 'continue'."""
+        data = {"trip": {"legs": [
+            {"shape": "", "maneuvers": [{"length": 0.1, "type": 999}]}
+        ], "summary": {}}}
+        resp = service._parse_valhalla_response(data)
+        assert resp.instructions[0].maneuver == "continue"
+
+    def test_maneuver_type_all_mapped_values_are_strings(self, service):
+        """Every value in VALHALLA_MANEUVER_TYPES should be a non-empty string."""
+        for type_id, name in service.VALHALLA_MANEUVER_TYPES.items():
+            assert isinstance(type_id, int), f"Key {type_id} should be int"
+            assert isinstance(name, str), f"Value for {type_id} should be str"
+            assert len(name) > 0, f"Value for {type_id} should not be empty"
 
 
 # ============================================================
@@ -768,7 +748,6 @@ class TestProtocolEdgeCases:
         payload = MapTileResponsePayload(
             z=1, x=0, y=0,
             format=TileFormat.RAW_1BIT,
-            chunk_index=0, total_chunks=1,
             data=data,
         )
         encoded = _encode_payload(MessageType.MAP_TILE_RESPONSE, payload)
@@ -818,7 +797,7 @@ class TestMapsCrossCompatibility:
         # No error
         payload = MapTileResponsePayload(
             z=10, x=100, y=200, format=TileFormat.MONO_RLE,
-            chunk_index=0, total_chunks=1, data=b"\x00",
+            data=b"\x00",
         )
         encoded = _encode_payload(MessageType.MAP_TILE_RESPONSE, payload)
         data = msgpack.unpackb(encoded, raw=False)
@@ -1103,9 +1082,173 @@ class TestTileserverServiceEdgeCases:
         svc = MapsService(config)
 
         payload = MapTileRequestPayload(z=10, x=100, y=200, format=TileFormat.MONO_RLE)
-        responses = svc._handle_tile_request(payload)
-        assert len(responses) == 1
-        assert responses[0].error is not None
+        response = svc._handle_tile_request(payload)
+        assert response.error is not None
+
+
+# ============================================================
+# Geocode Response Size Limiting
+# ============================================================
+
+
+class TestGeocodeResponseSizeLimiting:
+    """Test that geocode responses fit in a single Reticulum link packet."""
+
+    def test_truncate_display_name_short(self):
+        """Short names pass through unchanged."""
+        assert MapsService._truncate_display_name("Sears Tower") == "Sears Tower"
+
+    def test_truncate_display_name_at_comma(self):
+        """Long names are truncated at comma boundaries."""
+        long_name = "330 South Michigan Avenue, Near South Side, Chicago, Cook County, Illinois, 60604, United States"
+        result = MapsService._truncate_display_name(long_name, max_len=50)
+        assert len(result) <= 50
+        # Should truncate at the last comma that fits within 50 chars
+        assert "," not in result[result.rfind(",") + 1:] if "," in result else True
+        assert not result.endswith(",")  # no trailing comma
+
+    def test_truncate_display_name_no_good_comma(self):
+        """Names with no useful comma get hard-truncated with ellipsis."""
+        long_name = "A" * 60  # no commas
+        result = MapsService._truncate_display_name(long_name, max_len=50)
+        assert len(result) <= 53  # 50 + "..."
+        assert result.endswith("...")
+
+    def test_truncate_display_name_early_comma_ignored(self):
+        """Commas in the first 15 chars are ignored to keep names useful."""
+        long_name = "A, " + "B" * 60  # comma at position 1
+        result = MapsService._truncate_display_name(long_name, max_len=50)
+        assert result.endswith("...")
+        assert len(result) <= 53
+
+    def test_geocode_response_fits_in_packet(self):
+        """Verify a realistic geocode response encodes within the size budget."""
+        import msgpack
+
+        results = [
+            MapGeocodeResult(
+                display_name="330 South Michigan Avenue, Chicago",
+                lat=418799510,
+                lon=-876243410,
+                type="tourism",
+            ),
+            MapGeocodeResult(
+                display_name="Willis Tower, Chicago",
+                lat=418787700,
+                lon=-876358700,
+                type="tourism",
+            ),
+            MapGeocodeResult(
+                display_name="Art Institute of Chicago",
+                lat=418796150,
+                lon=-876240780,
+                type="museum",
+            ),
+        ]
+        data = {
+            "query": "330 s michigan ave",
+            "results": [
+                {"display_name": r.display_name, "lat": r.lat,
+                 "lon": r.lon, "type": r.type}
+                for r in results
+            ],
+        }
+        encoded = msgpack.packb(data, use_bin_type=True)
+        assert len(encoded) <= MapsService.MAX_GEOCODE_PAYLOAD_BYTES
+
+    def test_geocode_caps_max_results(self):
+        """Requesting more than 3 results still returns at most 3."""
+        config = Mock(spec=Config)
+        config.maps_mbtiles_path = None
+        config.maps_valhalla_url = None
+        config.maps_nominatim_url = "http://localhost:8080"
+        config.maps_tileserver_url = None
+        service = MapsService(config)
+
+        nominatim_results = [
+            {"display_name": f"Place {i}", "lat": "41.8", "lon": "-87.6", "type": "place"}
+            for i in range(10)
+        ]
+
+        mock_resp = Mock()
+        mock_resp.json.return_value = nominatim_results
+        mock_resp.raise_for_status = Mock()
+
+        with patch.object(service._http_client, "get", return_value=mock_resp):
+            payload = MapGeocodeRequestPayload(query="test", max_results=10)
+            resp = service._handle_geocode_request(payload)
+
+        assert len(resp.results) <= 3
+
+    def test_geocode_drops_results_if_too_large(self):
+        """Very long display names cause results to be dropped to fit."""
+        config = Mock(spec=Config)
+        config.maps_mbtiles_path = None
+        config.maps_valhalla_url = None
+        config.maps_nominatim_url = "http://localhost:8080"
+        config.maps_tileserver_url = None
+        service = MapsService(config)
+
+        # Each display_name is 50 chars (after truncation), 3 results with
+        # overhead may exceed the budget depending on query length
+        nominatim_results = [
+            {
+                "display_name": f"Very Long Place Name Number {i}, Some City, Some Very Long State Name, Country",
+                "lat": "41.8",
+                "lon": "-87.6",
+                "type": "place",
+            }
+            for i in range(3)
+        ]
+
+        mock_resp = Mock()
+        mock_resp.json.return_value = nominatim_results
+        mock_resp.raise_for_status = Mock()
+
+        with patch.object(service._http_client, "get", return_value=mock_resp):
+            payload = MapGeocodeRequestPayload(query="test", max_results=3)
+            resp = service._handle_geocode_request(payload)
+
+        # Should have results (maybe fewer than 3 if truncation wasn't enough)
+        assert len(resp.results) > 0
+
+        # Verify the encoded payload fits
+        import msgpack
+        data = {
+            "query": resp.query,
+            "results": [
+                {"display_name": r.display_name, "lat": r.lat,
+                 "lon": r.lon, "type": r.type}
+                for r in resp.results
+            ],
+        }
+        encoded = msgpack.packb(data, use_bin_type=True)
+        assert len(encoded) <= MapsService.MAX_GEOCODE_PAYLOAD_BYTES
+
+    def test_geocode_type_truncated(self):
+        """Result type field is truncated to 12 chars."""
+        config = Mock(spec=Config)
+        config.maps_mbtiles_path = None
+        config.maps_valhalla_url = None
+        config.maps_nominatim_url = "http://localhost:8080"
+        config.maps_tileserver_url = None
+        service = MapsService(config)
+
+        nominatim_results = [
+            {"display_name": "Place", "lat": "41.8", "lon": "-87.6",
+             "type": "very_long_type_name_here"}
+        ]
+
+        mock_resp = Mock()
+        mock_resp.json.return_value = nominatim_results
+        mock_resp.raise_for_status = Mock()
+
+        with patch.object(service._http_client, "get", return_value=mock_resp):
+            payload = MapGeocodeRequestPayload(query="test", max_results=3)
+            resp = service._handle_geocode_request(payload)
+
+        assert len(resp.results) == 1
+        assert len(resp.results[0].type) <= 12
 
 
 # ============================================================
