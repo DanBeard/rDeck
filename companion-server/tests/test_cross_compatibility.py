@@ -17,6 +17,13 @@ from companion_server.protocol.messages import (
     SearchRequestPayload,
     SearchResponsePayload,
     SearchResult,
+    TravelMode,
+    MapRouteRequestPayload,
+    MapRouteResponsePayload,
+    MapRouteInstruction,
+    MapGeocodeRequestPayload,
+    MapGeocodeResponsePayload,
+    MapGeocodeResult,
 )
 from companion_server.protocol.serialization import (
     _encode_payload,
@@ -151,6 +158,115 @@ class TestCanonicalTestVectors:
         decoded_raw = msgpack.unpackb(encoded, raw=False)
         assert decoded_raw == expected_structure
 
+    def test_route_request_vector(self):
+        """MAP_ROUTE_REQUEST with coordinates and travel mode."""
+        expected_structure = {
+            "start_lat": 478563210,
+            "start_lon": -1224567890,
+            "end_lat": 478600000,
+            "end_lon": -1224500000,
+            "mode": 0,  # WALK
+        }
+
+        payload = MapRouteRequestPayload(
+            start_lat=478563210,
+            start_lon=-1224567890,
+            end_lat=478600000,
+            end_lon=-1224500000,
+            mode=TravelMode.WALK,
+        )
+        encoded = _encode_payload(MessageType.MAP_ROUTE_REQUEST, payload)
+
+        decoded_raw = msgpack.unpackb(encoded, raw=False)
+        assert decoded_raw == expected_structure
+
+        decoded = _decode_payload(MessageType.MAP_ROUTE_REQUEST, encoded)
+        assert decoded.start_lat == 478563210
+        assert decoded.start_lon == -1224567890
+        assert decoded.mode == TravelMode.WALK
+
+    def test_route_response_vector(self):
+        """MAP_ROUTE_RESPONSE with points, instructions, and summary."""
+        expected_structure = {
+            "points": [478563210, -1224567890, 478600000, -1224500000],
+            "instructions": [
+                {"distance_m": 150, "maneuver": "straight", "street": "Main St"},
+                {"distance_m": 0, "maneuver": "arrive", "street": ""},
+            ],
+            "total_distance_m": 150,
+            "total_time_s": 120,
+        }
+
+        payload = MapRouteResponsePayload(
+            points=[478563210, -1224567890, 478600000, -1224500000],
+            instructions=[
+                MapRouteInstruction(distance_m=150, maneuver="straight", street="Main St"),
+                MapRouteInstruction(distance_m=0, maneuver="arrive", street=""),
+            ],
+            total_distance_m=150,
+            total_time_s=120,
+        )
+        encoded = _encode_payload(MessageType.MAP_ROUTE_RESPONSE, payload)
+
+        decoded_raw = msgpack.unpackb(encoded, raw=False)
+        assert decoded_raw == expected_structure
+
+    def test_route_response_with_error_vector(self):
+        """MAP_ROUTE_RESPONSE with error."""
+        payload = MapRouteResponsePayload(
+            points=[],
+            instructions=[],
+            total_distance_m=0,
+            total_time_s=0,
+            error="No route found",
+        )
+        encoded = _encode_payload(MessageType.MAP_ROUTE_RESPONSE, payload)
+
+        decoded_raw = msgpack.unpackb(encoded, raw=False)
+        assert decoded_raw["error"] == "No route found"
+        assert decoded_raw["points"] == []
+
+    def test_geocode_request_vector(self):
+        """MAP_GEOCODE_REQUEST with query and bias."""
+        payload = MapGeocodeRequestPayload(
+            query="Portland",
+            bias_lat=455123456,
+            bias_lon=-1226789012,
+            max_results=3,
+        )
+        encoded = _encode_payload(MessageType.MAP_GEOCODE_REQUEST, payload)
+
+        decoded_raw = msgpack.unpackb(encoded, raw=False)
+        assert decoded_raw["query"] == "Portland"
+        assert decoded_raw["max_results"] == 3
+        assert decoded_raw["bias_lat"] == 455123456
+        assert decoded_raw["bias_lon"] == -1226789012
+
+    def test_geocode_response_vector(self):
+        """MAP_GEOCODE_RESPONSE with results."""
+        expected_results = [
+            {"display_name": "Portland, OR, USA", "lat": 455123456, "lon": -1226789012, "type": "city"},
+            {"display_name": "Portland, ME, USA", "lat": 436568000, "lon": -702580000, "type": "city"},
+        ]
+
+        payload = MapGeocodeResponsePayload(
+            query="Portland",
+            results=[
+                MapGeocodeResult(display_name="Portland, OR, USA", lat=455123456, lon=-1226789012, type="city"),
+                MapGeocodeResult(display_name="Portland, ME, USA", lat=436568000, lon=-702580000, type="city"),
+            ],
+        )
+        encoded = _encode_payload(MessageType.MAP_GEOCODE_RESPONSE, payload)
+
+        decoded_raw = msgpack.unpackb(encoded, raw=False)
+        assert decoded_raw["query"] == "Portland"
+        assert decoded_raw["results"] == expected_results
+
+        decoded = _decode_payload(MessageType.MAP_GEOCODE_RESPONSE, encoded)
+        assert len(decoded.results) == 2
+        assert decoded.results[0].display_name == "Portland, OR, USA"
+        assert decoded.results[0].lat == 455123456
+
 
 class TestMessageTypeCompatibility:
     """Verify message type enum values match protocol spec."""
@@ -164,6 +280,12 @@ class TestMessageTypeCompatibility:
         "NTP_RESPONSE": 0x11,
         "SEARCH_REQUEST": 0x20,
         "SEARCH_RESPONSE": 0x21,
+        "MAP_TILE_REQUEST": 0x30,
+        "MAP_TILE_RESPONSE": 0x31,
+        "MAP_ROUTE_REQUEST": 0x33,
+        "MAP_ROUTE_RESPONSE": 0x34,
+        "MAP_GEOCODE_REQUEST": 0x35,
+        "MAP_GEOCODE_RESPONSE": 0x36,
     }
 
     def test_all_message_types_match_protocol(self):
@@ -175,6 +297,12 @@ class TestMessageTypeCompatibility:
         assert MessageType.NTP_RESPONSE == self.PROTOCOL_VALUES["NTP_RESPONSE"]
         assert MessageType.SEARCH_REQUEST == self.PROTOCOL_VALUES["SEARCH_REQUEST"]
         assert MessageType.SEARCH_RESPONSE == self.PROTOCOL_VALUES["SEARCH_RESPONSE"]
+        assert MessageType.MAP_TILE_REQUEST == self.PROTOCOL_VALUES["MAP_TILE_REQUEST"]
+        assert MessageType.MAP_TILE_RESPONSE == self.PROTOCOL_VALUES["MAP_TILE_RESPONSE"]
+        assert MessageType.MAP_ROUTE_REQUEST == self.PROTOCOL_VALUES["MAP_ROUTE_REQUEST"]
+        assert MessageType.MAP_ROUTE_RESPONSE == self.PROTOCOL_VALUES["MAP_ROUTE_RESPONSE"]
+        assert MessageType.MAP_GEOCODE_REQUEST == self.PROTOCOL_VALUES["MAP_GEOCODE_REQUEST"]
+        assert MessageType.MAP_GEOCODE_RESPONSE == self.PROTOCOL_VALUES["MAP_GEOCODE_RESPONSE"]
 
 
 class TestMsgpackFieldNames:
@@ -247,6 +375,78 @@ class TestMsgpackFieldNames:
         assert "title" in result
         assert "url" in result
         assert "snippet" in result
+
+    def test_route_request_field_names(self):
+        """MAP_ROUTE_REQUEST must use exactly these field names."""
+        payload = MapRouteRequestPayload(
+            start_lat=0, start_lon=0, end_lat=0, end_lon=0,
+        )
+        encoded = _encode_payload(MessageType.MAP_ROUTE_REQUEST, payload)
+        data = msgpack.unpackb(encoded, raw=False)
+
+        assert "start_lat" in data
+        assert "start_lon" in data
+        assert "end_lat" in data
+        assert "end_lon" in data
+        assert "mode" in data
+
+    def test_route_response_field_names(self):
+        """MAP_ROUTE_RESPONSE must use exactly these field names."""
+        payload = MapRouteResponsePayload(points=[])
+        encoded = _encode_payload(MessageType.MAP_ROUTE_RESPONSE, payload)
+        data = msgpack.unpackb(encoded, raw=False)
+
+        assert "points" in data
+        assert "instructions" in data
+        assert "total_distance_m" in data
+        assert "total_time_s" in data
+
+    def test_route_instruction_field_names(self):
+        """Route instructions must use exactly these field names."""
+        payload = MapRouteResponsePayload(
+            points=[],
+            instructions=[MapRouteInstruction(distance_m=0, maneuver="straight", street="")],
+        )
+        encoded = _encode_payload(MessageType.MAP_ROUTE_RESPONSE, payload)
+        data = msgpack.unpackb(encoded, raw=False)
+
+        instruction = data["instructions"][0]
+        assert "distance_m" in instruction
+        assert "maneuver" in instruction
+        assert "street" in instruction
+
+    def test_geocode_request_field_names(self):
+        """MAP_GEOCODE_REQUEST must use exactly these field names."""
+        payload = MapGeocodeRequestPayload(query="test")
+        encoded = _encode_payload(MessageType.MAP_GEOCODE_REQUEST, payload)
+        data = msgpack.unpackb(encoded, raw=False)
+
+        assert "query" in data
+        assert "max_results" in data
+
+    def test_geocode_response_field_names(self):
+        """MAP_GEOCODE_RESPONSE must use exactly these field names."""
+        payload = MapGeocodeResponsePayload(query="test", results=[])
+        encoded = _encode_payload(MessageType.MAP_GEOCODE_RESPONSE, payload)
+        data = msgpack.unpackb(encoded, raw=False)
+
+        assert "query" in data
+        assert "results" in data
+
+    def test_geocode_result_field_names(self):
+        """Geocode results must use exactly these field names."""
+        payload = MapGeocodeResponsePayload(
+            query="test",
+            results=[MapGeocodeResult(display_name="Place", lat=0, lon=0, type="city")],
+        )
+        encoded = _encode_payload(MessageType.MAP_GEOCODE_RESPONSE, payload)
+        data = msgpack.unpackb(encoded, raw=False)
+
+        result = data["results"][0]
+        assert "display_name" in result
+        assert "lat" in result
+        assert "lon" in result
+        assert "type" in result
 
 
 class TestLXMFFieldsStructure:
@@ -350,6 +550,82 @@ class TestDecodeFromCppVectors:
         assert decoded.query == "cpp query"
         assert len(decoded.results) == 1
         assert decoded.results[0].title == "CppResult"
+
+    def test_decode_cpp_route_response(self):
+        """Decode MAP_ROUTE_RESPONSE as C++ would encode it."""
+        cpp_data = msgpack.packb({
+            "points": [478563210, -1224567890, 478600000, -1224500000],
+            "instructions": [
+                {"distance_m": 150, "maneuver": "straight", "street": "Main St"},
+                {"distance_m": 0, "maneuver": "arrive", "street": ""},
+            ],
+            "total_distance_m": 150,
+            "total_time_s": 120,
+        }, use_bin_type=True)
+
+        decoded = _decode_payload(MessageType.MAP_ROUTE_RESPONSE, cpp_data)
+
+        assert decoded.points == [478563210, -1224567890, 478600000, -1224500000]
+        assert len(decoded.instructions) == 2
+        assert decoded.instructions[0].maneuver == "straight"
+        assert decoded.instructions[0].street == "Main St"
+        assert decoded.instructions[0].distance_m == 150
+        assert decoded.instructions[1].maneuver == "arrive"
+        assert decoded.total_distance_m == 150
+        assert decoded.total_time_s == 120
+        assert decoded.error is None
+
+    def test_decode_cpp_route_response_with_error(self):
+        """Decode MAP_ROUTE_RESPONSE with error as C++ would encode it."""
+        cpp_data = msgpack.packb({
+            "points": [],
+            "instructions": [],
+            "total_distance_m": 0,
+            "total_time_s": 0,
+            "error": "No route found",
+        }, use_bin_type=True)
+
+        decoded = _decode_payload(MessageType.MAP_ROUTE_RESPONSE, cpp_data)
+
+        assert decoded.points == []
+        assert len(decoded.instructions) == 0
+        assert decoded.error == "No route found"
+
+    def test_decode_cpp_geocode_response(self):
+        """Decode MAP_GEOCODE_RESPONSE as C++ would encode it."""
+        cpp_data = msgpack.packb({
+            "query": "Portland",
+            "results": [
+                {"display_name": "Portland, OR, USA", "lat": 455123456, "lon": -1226789012, "type": "city"},
+            ],
+        }, use_bin_type=True)
+
+        decoded = _decode_payload(MessageType.MAP_GEOCODE_RESPONSE, cpp_data)
+
+        assert decoded.query == "Portland"
+        assert len(decoded.results) == 1
+        assert decoded.results[0].display_name == "Portland, OR, USA"
+        assert decoded.results[0].lat == 455123456
+        assert decoded.results[0].lon == -1226789012
+        assert decoded.results[0].type == "city"
+
+    def test_decode_cpp_route_request(self):
+        """Decode MAP_ROUTE_REQUEST as C++ would encode it."""
+        cpp_data = msgpack.packb({
+            "start_lat": 478563210,
+            "start_lon": -1224567890,
+            "end_lat": 478600000,
+            "end_lon": -1224500000,
+            "mode": 1,  # BIKE
+        }, use_bin_type=True)
+
+        decoded = _decode_payload(MessageType.MAP_ROUTE_REQUEST, cpp_data)
+
+        assert decoded.start_lat == 478563210
+        assert decoded.start_lon == -1224567890
+        assert decoded.end_lat == 478600000
+        assert decoded.end_lon == -1224500000
+        assert decoded.mode == TravelMode.BIKE
 
 
 class TestNTPWorkflowCompatibility:
@@ -616,3 +892,45 @@ class TestLXMFMessageFormat:
         assert inner_data["query"] == "test query"
         assert len(inner_data["results"]) == 2
         assert inner_data["results"][0]["title"] == "Result 1"
+
+    def test_lxmf_route_response_format(self):
+        """Create LXMF message with MAP_ROUTE_RESPONSE fields."""
+        from companion_server.protocol import encode_service_fields, ServiceMessage
+
+        payload = MapRouteResponsePayload(
+            points=[478563210, -1224567890, 478580000, -1224530000, 478600000, -1224500000],
+            instructions=[
+                MapRouteInstruction(distance_m=150, maneuver="straight", street="Main St"),
+                MapRouteInstruction(distance_m=200, maneuver="turn-left", street="Oak Ave"),
+                MapRouteInstruction(distance_m=0, maneuver="arrive", street=""),
+            ],
+            total_distance_m=350,
+            total_time_s=240,
+        )
+        msg = ServiceMessage(
+            msg_type=MessageType.MAP_ROUTE_RESPONSE,
+            service="maps",
+            payload=payload,
+            request_id=500,
+        )
+
+        fields = encode_service_fields(msg)
+        lxmf_payload = [1706825600, b"", b"", fields]
+        packed = msgpack.packb(lxmf_payload, use_bin_type=True)
+
+        # Verify structure
+        unpacked = msgpack.unpackb(packed, raw=False)
+        extracted_fields = unpacked[3]
+
+        assert extracted_fields["msg_type"] == 0x34
+        assert extracted_fields["service"] == "maps"
+        assert extracted_fields["request_id"] == 500
+
+        inner_data = msgpack.unpackb(extracted_fields["payload"], raw=False)
+        assert len(inner_data["points"]) == 6
+        assert inner_data["points"][0] == 478563210
+        assert len(inner_data["instructions"]) == 3
+        assert inner_data["instructions"][0]["maneuver"] == "straight"
+        assert inner_data["instructions"][0]["street"] == "Main St"
+        assert inner_data["total_distance_m"] == 350
+        assert inner_data["total_time_s"] == 240

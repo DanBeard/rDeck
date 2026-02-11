@@ -36,12 +36,19 @@ public:
     void goToLocation(int32_t lat, int32_t lon);
     void setSearchPinName(const std::string& name) { _searchPinName = name; }
     void retrySearch();
+    void requestDirections();
+    void toggleDirections();
+    void recalculateRoute();
+    void clearDirections();
 
     // Public access to members needed by callbacks
     lv_obj_t* getSearchOverlay() { return _search_overlay; }
     lv_obj_t* getSearchInput() { return _search_input; }
+    lv_obj_t* getDirectionsOverlay() { return _directions_overlay; }
     std::vector<Retcon::Service::MapGeocodeResult>& getSearchResults() { return _searchResults; }
     bool& searchMode() { return _searchMode; }
+    bool showingDirections() const { return _showingDirections; }
+    bool hasRoute() const { return _hasRoute; }
 
 protected:
     // Drawing
@@ -90,11 +97,13 @@ protected:
     void displaySearchResults(const Retcon::Service::MapGeocodeResponsePayload& results);
     void displaySearchTimeout();
 
-    // Route
-    void startRouting();
+    // Route / Directions
     void calculateRoute();
     void displayRoute(const Retcon::Service::MapRouteResponsePayload& route);
     void clearRoute();
+    void drawDirectionsOverlay();
+    void populateDirections();
+    void drawRoutePolyline();
 
     // UI elements
     lv_obj_t* _map_canvas = nullptr;
@@ -110,6 +119,13 @@ protected:
     lv_obj_t* _loading_spinner = nullptr;
     lv_obj_t* _error_label = nullptr;
     lv_obj_t* _search_btn = nullptr;
+    lv_obj_t* _route_btn = nullptr;
+
+    // Directions UI
+    lv_obj_t* _directions_overlay = nullptr;
+    lv_obj_t* _directions_list = nullptr;
+    lv_obj_t* _directions_summary = nullptr;
+    lv_obj_t* _directions_recalc_btn = nullptr;
 
     // Canvas buffer (240x280 = 67200 pixels, but we use 1-bit = 8400 bytes for mono)
     static const int CANVAS_WIDTH = 240;
@@ -146,7 +162,14 @@ protected:
 
     // Route data
     std::vector<int32_t> _routePoints;  // lat/lon pairs * 1e7
+    std::vector<Retcon::Service::MapRouteInstruction> _routeInstructions;
+    uint32_t _routeTotalDistanceM = 0;
+    uint32_t _routeTotalTimeS = 0;
     bool _hasRoute = false;
+    bool _showingDirections = false;
+    bool _routePending = false;
+    unsigned long _routeStartTime = 0;
+    static const unsigned long ROUTE_TIMEOUT_MS = 30000;
 
     // Search results
     std::vector<Retcon::Service::MapGeocodeResult> _searchResults;

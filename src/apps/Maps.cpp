@@ -14,6 +14,8 @@ static void zoomInCallback(lv_event_t* e);
 static void zoomOutCallback(lv_event_t* e);
 static void searchBtnCallback(lv_event_t* e);
 static void searchRetryCallback(lv_event_t* e);
+static void routeBtnCallback(lv_event_t* e);
+static void recalcBtnCallback(lv_event_t* e);
 
 // TileKey comparison operators
 bool Maps::TileKey::operator<(const TileKey& other) const {
@@ -113,13 +115,25 @@ void Maps::tick(const unsigned long tickMillis) {
             lv_obj_clear_flag(_search_status_label, LV_OBJ_FLAG_HIDDEN);
         }
     }
+
+    // Check route timeout
+    if (_routePending && _directions_summary) {
+        unsigned long elapsed = tickMillis - _routeStartTime;
+        if (elapsed >= ROUTE_TIMEOUT_MS) {
+            _routePending = false;
+            lv_label_set_text(_directions_summary, "Route timed out");
+            lv_obj_clear_flag(_directions_recalc_btn, LV_OBJ_FLAG_HIDDEN);
+        } else if (elapsed >= 5000) {
+            lv_label_set_text_fmt(_directions_summary, "Calculating route... (%lus)", elapsed / 1000);
+        }
+    }
 }
 
 void Maps::stop() {
+    clearDirections();
     _tileCache.clear();
     _tileLruOrder.clear();
     _pendingTileRequests.clear();
-    _routePoints.clear();
     _searchResults.clear();
     _hasSearchPin = false;
     _searchPinName.clear();
@@ -285,6 +299,26 @@ void Maps::drawUI() {
     lv_obj_set_style_text_color(search_icon, lv_color_black(), LV_PART_MAIN);
     lv_obj_center(search_icon);
 
+    // Route/directions button (above search button)
+    _route_btn = lv_btn_create(main);
+    lv_obj_set_size(_route_btn, 36, 36);
+    lv_obj_align_to(_route_btn, _search_btn, LV_ALIGN_OUT_TOP_MID, 0, -4);
+    lv_obj_set_style_bg_color(_route_btn, lv_color_white(), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(_route_btn, LV_OPA_100, LV_PART_MAIN);
+    lv_obj_set_style_border_color(_route_btn, lv_color_black(), LV_PART_MAIN);
+    lv_obj_set_style_border_width(_route_btn, 2, LV_PART_MAIN);
+    lv_obj_set_style_shadow_width(_route_btn, 0, LV_PART_MAIN);
+    lv_obj_set_style_radius(_route_btn, 4, LV_PART_MAIN);
+    lv_obj_add_event_cb(_route_btn, routeBtnCallback, LV_EVENT_CLICKED, this);
+    lv_obj_t* route_icon = lv_label_create(_route_btn);
+    lv_label_set_text(route_icon, LV_SYMBOL_SHUFFLE);
+    lv_obj_set_style_text_font(route_icon, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_set_style_text_color(route_icon, lv_color_black(), LV_PART_MAIN);
+    lv_obj_center(route_icon);
+
+    // Directions overlay (hidden by default)
+    drawDirectionsOverlay();
+
     // Register keyboard handler for the main screen
     lv_obj_add_event_cb(main, mapKeyCallback, LV_EVENT_KEY, this);
     lv_group_add_obj(_retos->ui()->default_input_group(), main);
@@ -338,10 +372,18 @@ static void mapKeyCallback(lv_event_t* e) {
         case '/':
             app->startSearch();
             break;
+        case 'r':
+        case 'R':
+            app->toggleDirections();
+            break;
         case LV_KEY_ESC:
-            if (app->searchMode()) {
+            if (app->showingDirections()) {
+                app->toggleDirections();
+            } else if (app->searchMode()) {
                 lv_obj_add_flag(app->getSearchOverlay(), LV_OBJ_FLAG_HIDDEN);
                 app->searchMode() = false;
+            } else if (app->hasRoute()) {
+                app->clearDirections();
             }
             break;
     }
@@ -391,6 +433,16 @@ static void searchBtnCallback(lv_event_t* e) {
 static void searchRetryCallback(lv_event_t* e) {
     Maps* app = (Maps*)lv_event_get_user_data(e);
     if (app) app->retrySearch();
+}
+
+static void routeBtnCallback(lv_event_t* e) {
+    Maps* app = (Maps*)lv_event_get_user_data(e);
+    if (app) app->requestDirections();
+}
+
+static void recalcBtnCallback(lv_event_t* e) {
+    Maps* app = (Maps*)lv_event_get_user_data(e);
+    if (app) app->recalculateRoute();
 }
 
 void Maps::showError(const char* msg) {
@@ -476,9 +528,9 @@ void Maps::renderMap() {
         drawSearchPin();
     }
 
-    // Draw route if we have one
+    // Draw route polyline if we have one
     if (_hasRoute && _routePoints.size() >= 4) {
-        // TODO: Draw route polyline
+        drawRoutePolyline();
     }
 
     // Update status bar
@@ -932,7 +984,7 @@ void Maps::performSearch(const std::string& query) {
     RNS::Bytes serverHash = _mapsServerHash;
     std::string queryCopy = query;
     rns->queueAction([rns, serverHash, queryCopy, biasLat, biasLon]() {
-        rns->requestGeocode(serverHash, queryCopy, biasLat, biasLon, true, 5);
+        rns->requestGeocode(serverHash, queryCopy, biasLat, biasLon, true, 3);
     });
 
     // Show loading
@@ -1012,13 +1064,6 @@ void Maps::goToLocation(int32_t lat, int32_t lon) {
     requestVisibleTiles();
 }
 
-// Route (placeholder for now)
-void Maps::startRouting() {
-    _routeMode = true;
-    _hasRouteStart = false;
-    // TODO: Implement route start/end selection UI
-}
-
 void Maps::calculateRoute() {
     if (!_hasRouteStart) return;
     if (_mapsServerHash.size() == 0 && !findMapsServer()) return;
@@ -1038,20 +1083,309 @@ void Maps::calculateRoute() {
 }
 
 void Maps::displayRoute(const Retcon::Service::MapRouteResponsePayload& response) {
+    _routePending = false;
+
     if (!response.error.empty()) {
         Serial.printf("[Maps] Route error: %s\n", response.error.c_str());
+        if (_directions_summary) {
+            lv_label_set_text_fmt(_directions_summary, "Route error: %s", response.error.c_str());
+        }
+        if (_directions_recalc_btn) {
+            lv_obj_clear_flag(_directions_recalc_btn, LV_OBJ_FLAG_HIDDEN);
+        }
         return;
     }
 
     _routePoints = response.points;
+    _routeInstructions = response.instructions;
+    _routeTotalDistanceM = response.total_distance_m;
+    _routeTotalTimeS = response.total_time_s;
     _hasRoute = true;
+
+    populateDirections();
     renderMap();
+
+    // Show directions overlay
+    if (_directions_overlay) {
+        _showingDirections = true;
+        lv_obj_clear_flag(_directions_overlay, LV_OBJ_FLAG_HIDDEN);
+    }
 }
 
 void Maps::clearRoute() {
     _routePoints.clear();
     _hasRoute = false;
     renderMap();
+}
+
+void Maps::drawDirectionsOverlay() {
+    // Get parent (main container) from the map canvas
+    lv_obj_t* main = lv_obj_get_parent(_map_canvas);
+
+    _directions_overlay = lv_obj_create(main);
+    lv_obj_set_size(_directions_overlay, LV_PCT(90), LV_PCT(80));
+    lv_obj_align(_directions_overlay, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_style_bg_color(_directions_overlay, lv_color_white(), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(_directions_overlay, LV_OPA_100, LV_PART_MAIN);
+    lv_obj_set_style_border_color(_directions_overlay, lv_color_black(), LV_PART_MAIN);
+    lv_obj_set_style_border_width(_directions_overlay, 1, LV_PART_MAIN);
+    lv_obj_set_flex_flow(_directions_overlay, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_all(_directions_overlay, 5, LV_PART_MAIN);
+    lv_obj_add_flag(_directions_overlay, LV_OBJ_FLAG_HIDDEN);
+
+    // Summary header
+    _directions_summary = lv_label_create(_directions_overlay);
+    lv_obj_set_width(_directions_summary, LV_PCT(100));
+    lv_obj_set_style_text_font(_directions_summary, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_set_style_text_color(_directions_summary, lv_color_black(), LV_PART_MAIN);
+    lv_label_set_text(_directions_summary, "Directions");
+    lv_label_set_long_mode(_directions_summary, LV_LABEL_LONG_WRAP);
+
+    // Scrollable list
+    _directions_list = lv_list_create(_directions_overlay);
+    lv_obj_set_size(_directions_list, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_flex_grow(_directions_list, 1);
+    lv_obj_set_style_pad_all(_directions_list, 2, LV_PART_MAIN);
+
+    // Recalculate button
+    _directions_recalc_btn = lv_btn_create(_directions_overlay);
+    lv_obj_set_size(_directions_recalc_btn, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_color(_directions_recalc_btn, lv_color_white(), LV_PART_MAIN);
+    lv_obj_set_style_border_color(_directions_recalc_btn, lv_color_black(), LV_PART_MAIN);
+    lv_obj_set_style_border_width(_directions_recalc_btn, 1, LV_PART_MAIN);
+    lv_obj_set_style_shadow_width(_directions_recalc_btn, 0, LV_PART_MAIN);
+    lv_obj_add_event_cb(_directions_recalc_btn, recalcBtnCallback, LV_EVENT_CLICKED, this);
+    lv_obj_t* recalc_label = lv_label_create(_directions_recalc_btn);
+    lv_label_set_text(recalc_label, LV_SYMBOL_REFRESH " Recalculate");
+    lv_obj_set_style_text_color(recalc_label, lv_color_black(), LV_PART_MAIN);
+    lv_obj_center(recalc_label);
+    lv_obj_add_flag(_directions_recalc_btn, LV_OBJ_FLAG_HIDDEN);
+}
+
+void Maps::requestDirections() {
+    if (!_hasSearchPin) {
+        showError("Search for a destination first");
+        return;
+    }
+    if (!_hasGps) {
+        showError("Waiting for GPS position");
+        return;
+    }
+
+    clearError();
+
+    // Set route from GPS to search pin
+    _routeStart = {_gpsLat, _gpsLon};
+    _routeEnd = {_searchPinLat / 1e7, _searchPinLon / 1e7};
+    _hasRouteStart = true;
+    _routePending = true;
+    _routeStartTime = millis();
+
+    // Show directions overlay with loading state
+    if (_directions_overlay) {
+        lv_obj_clear_flag(_directions_overlay, LV_OBJ_FLAG_HIDDEN);
+        _showingDirections = true;
+        lv_label_set_text(_directions_summary, "Calculating route...");
+        lv_obj_clean(_directions_list);
+        lv_obj_add_flag(_directions_recalc_btn, LV_OBJ_FLAG_HIDDEN);
+    }
+
+    calculateRoute();
+}
+
+void Maps::populateDirections() {
+    if (!_directions_list || !_directions_summary) return;
+
+    // Format summary
+    char summary[64];
+    if (_routeTotalDistanceM >= 1000) {
+        float km = _routeTotalDistanceM / 1000.0f;
+        if (_routeTotalTimeS >= 3600) {
+            snprintf(summary, sizeof(summary), "%.1f km  %uh %umin",
+                     km, _routeTotalTimeS / 3600, (_routeTotalTimeS % 3600) / 60);
+        } else {
+            snprintf(summary, sizeof(summary), "%.1f km  %u min", km, _routeTotalTimeS / 60);
+        }
+    } else {
+        if (_routeTotalTimeS >= 3600) {
+            snprintf(summary, sizeof(summary), "%u m  %uh %umin",
+                     _routeTotalDistanceM, _routeTotalTimeS / 3600, (_routeTotalTimeS % 3600) / 60);
+        } else {
+            snprintf(summary, sizeof(summary), "%u m  %u min", _routeTotalDistanceM, _routeTotalTimeS / 60);
+        }
+    }
+    lv_label_set_text(_directions_summary, summary);
+
+    // Populate instruction list
+    lv_obj_clean(_directions_list);
+
+    for (const auto& inst : _routeInstructions) {
+        // Choose icon based on maneuver type
+        const char* icon = LV_SYMBOL_NEXT;
+        if (inst.maneuver.find("left") != std::string::npos) {
+            icon = LV_SYMBOL_LEFT;
+        } else if (inst.maneuver.find("right") != std::string::npos) {
+            icon = LV_SYMBOL_RIGHT;
+        } else if (inst.maneuver == "continue" || inst.maneuver == "straight" ||
+                   inst.maneuver.find("stay-straight") != std::string::npos ||
+                   inst.maneuver.find("ramp-straight") != std::string::npos) {
+            icon = LV_SYMBOL_UP;
+        } else if (inst.maneuver.find("start") != std::string::npos) {
+            icon = LV_SYMBOL_PLAY;
+        } else if (inst.maneuver.find("destination") != std::string::npos) {
+            icon = LV_SYMBOL_OK;
+        } else if (inst.maneuver.find("u-turn") != std::string::npos) {
+            icon = LV_SYMBOL_LOOP;
+        } else if (inst.maneuver.find("roundabout") != std::string::npos) {
+            icon = LV_SYMBOL_REFRESH;
+        }
+
+        // Format: "icon Street (distance)"
+        char text[128];
+        std::string street = inst.street.empty() ? inst.maneuver : inst.street;
+        if (street.length() > 25) {
+            street = street.substr(0, 22) + "...";
+        }
+
+        if (inst.distance_m >= 1000) {
+            snprintf(text, sizeof(text), "%s %s (%.1fkm)", icon, street.c_str(), inst.distance_m / 1000.0f);
+        } else {
+            snprintf(text, sizeof(text), "%s %s (%um)", icon, street.c_str(), inst.distance_m);
+        }
+
+        lv_list_add_btn(_directions_list, NULL, text);
+    }
+
+    // Show recalculate button
+    lv_obj_clear_flag(_directions_recalc_btn, LV_OBJ_FLAG_HIDDEN);
+}
+
+void Maps::toggleDirections() {
+    if (!_hasRoute) {
+        // No route yet — request one
+        requestDirections();
+        return;
+    }
+
+    _showingDirections = !_showingDirections;
+
+    if (_showingDirections) {
+        // Show directions overlay
+        if (_directions_overlay) {
+            lv_obj_clear_flag(_directions_overlay, LV_OBJ_FLAG_HIDDEN);
+        }
+    } else {
+        // Hide directions overlay, show map
+        if (_directions_overlay) {
+            lv_obj_add_flag(_directions_overlay, LV_OBJ_FLAG_HIDDEN);
+        }
+        renderMap();
+    }
+}
+
+void Maps::recalculateRoute() {
+    if (!_hasGps) {
+        showError("Waiting for GPS position");
+        return;
+    }
+    if (!_hasSearchPin) {
+        showError("No destination set");
+        return;
+    }
+
+    clearError();
+
+    // Update start to current GPS position, keep destination
+    _routeStart = {_gpsLat, _gpsLon};
+    _hasRouteStart = true;
+    _routePending = true;
+    _routeStartTime = millis();
+
+    // Show loading state
+    if (_directions_summary) {
+        lv_label_set_text(_directions_summary, "Recalculating...");
+    }
+    if (_directions_list) {
+        lv_obj_clean(_directions_list);
+    }
+    if (_directions_recalc_btn) {
+        lv_obj_add_flag(_directions_recalc_btn, LV_OBJ_FLAG_HIDDEN);
+    }
+
+    calculateRoute();
+}
+
+void Maps::drawRoutePolyline() {
+    // Helper lambda to set a pixel with bounds checking
+    auto setpx = [&](int x, int y, lv_color_t c) {
+        if (x >= 0 && x < CANVAS_WIDTH && y >= 0 && y < CANVAS_HEIGHT - 20) {
+            lv_canvas_set_px_color(_map_canvas, x, y, c);
+        }
+    };
+
+    int centerPixelX, centerPixelY;
+    latLonToPixel(_centerLat, _centerLon, _zoom, centerPixelX, centerPixelY);
+
+    // Iterate consecutive pairs of points
+    for (size_t i = 0; i + 3 < _routePoints.size(); i += 2) {
+        double lat0 = _routePoints[i] / 1e7;
+        double lon0 = _routePoints[i + 1] / 1e7;
+        double lat1 = _routePoints[i + 2] / 1e7;
+        double lon1 = _routePoints[i + 3] / 1e7;
+
+        int px0, py0, px1, py1;
+        latLonToPixel(lat0, lon0, _zoom, px0, py0);
+        latLonToPixel(lat1, lon1, _zoom, px1, py1);
+
+        // Convert to screen coordinates
+        int sx0 = (CANVAS_WIDTH / 2) + (px0 - centerPixelX);
+        int sy0 = (CANVAS_HEIGHT / 2) + (py0 - centerPixelY);
+        int sx1 = (CANVAS_WIDTH / 2) + (px1 - centerPixelX);
+        int sy1 = (CANVAS_HEIGHT / 2) + (py1 - centerPixelY);
+
+        // Skip if both endpoints are far off-screen
+        const int MARGIN = 50;
+        if ((sx0 < -MARGIN && sx1 < -MARGIN) || (sx0 >= CANVAS_WIDTH + MARGIN && sx1 >= CANVAS_WIDTH + MARGIN) ||
+            (sy0 < -MARGIN && sy1 < -MARGIN) || (sy0 >= CANVAS_HEIGHT + MARGIN && sy1 >= CANVAS_HEIGHT + MARGIN)) {
+            continue;
+        }
+
+        // Bresenham's line algorithm with 2px width
+        int dx = abs(sx1 - sx0);
+        int dy = abs(sy1 - sy0);
+        int stepX = (sx0 < sx1) ? 1 : -1;
+        int stepY = (sy0 < sy1) ? 1 : -1;
+        int err = dx - dy;
+
+        int x = sx0, y = sy0;
+        while (true) {
+            // Draw 2px wide line (draw at y±1 for visibility)
+            setpx(x, y, lv_color_black());
+            setpx(x, y - 1, lv_color_black());
+            setpx(x, y + 1, lv_color_black());
+            setpx(x - 1, y, lv_color_black());
+
+            if (x == sx1 && y == sy1) break;
+
+            int e2 = 2 * err;
+            if (e2 > -dy) { err -= dy; x += stepX; }
+            if (e2 < dx) { err += dx; y += stepY; }
+        }
+    }
+}
+
+void Maps::clearDirections() {
+    _routeInstructions.clear();
+    _routeTotalDistanceM = 0;
+    _routeTotalTimeS = 0;
+    _showingDirections = false;
+    _routePending = false;
+
+    if (_directions_overlay) {
+        lv_obj_add_flag(_directions_overlay, LV_OBJ_FLAG_HIDDEN);
+    }
+
+    clearRoute();
 }
 
 EventStatus Maps::onEvent(const Event& event) {

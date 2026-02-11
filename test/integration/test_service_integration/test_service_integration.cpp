@@ -9,6 +9,7 @@
  * 3. Trust workflow message handling
  * 4. NTP workflow message handling
  * 5. Search workflow message handling
+ * 6. Route/Geocode workflow message handling
  *
  * The tests use mock/simulated network data to verify the service logic.
  */
@@ -486,6 +487,174 @@ void test_search_response_with_ai_summary(void) {
 }
 
 // ============================================================================
+// Route/Geocode Workflow Integration Tests
+// ============================================================================
+
+void test_route_request_message_generation(void) {
+    // Test generating a MAP_ROUTE_REQUEST message
+    MapRouteRequestPayload payload;
+    payload.start_lat = 478563210;   // 47.856321 * 1e7
+    payload.start_lon = -1224567890; // -122.456789 * 1e7
+    payload.end_lat = 478600000;
+    payload.end_lon = -1224500000;
+    payload.mode = TravelMode::WALK;
+
+    uint8_t payloadBuf[128];
+    size_t payloadLen = payload.serialize(payloadBuf, sizeof(payloadBuf));
+
+    ServiceMessage msg;
+    msg.msg_type = MessageType::MAP_ROUTE_REQUEST;
+    msg.service = "maps";
+    msg.request_id = 500;
+    msg.payload.assign(payloadBuf, payloadLen);
+
+    // Convert to fields for LXMF
+    JsonDocument fields;
+    msg.toFields(fields);
+
+    TEST_ASSERT_EQUAL(0x33, fields["msg_type"].as<uint8_t>());
+    TEST_ASSERT_EQUAL_STRING("maps", fields["service"].as<const char*>());
+    TEST_ASSERT_EQUAL(500, fields["request_id"].as<uint32_t>());
+
+    // Verify payload can be decoded
+    MsgPackBinary bin = fields["payload"].as<MsgPackBinary>();
+    MapRouteRequestPayload decoded;
+    decoded.deserialize((const uint8_t*)bin.data(), bin.size());
+    TEST_ASSERT_EQUAL_INT32(478563210, decoded.start_lat);
+    TEST_ASSERT_EQUAL_INT32(-1224567890, decoded.start_lon);
+    TEST_ASSERT_EQUAL_INT32(478600000, decoded.end_lat);
+    TEST_ASSERT_EQUAL_INT32(-1224500000, decoded.end_lon);
+    TEST_ASSERT_EQUAL(TravelMode::WALK, decoded.mode);
+}
+
+void test_route_response_handling(void) {
+    // Simulate receiving MAP_ROUTE_RESPONSE with full data
+    MapRouteResponsePayload innerPayload;
+    innerPayload.points = {478563210, -1224567890, 478580000, -1224530000, 478600000, -1224500000};
+    innerPayload.instructions.push_back({150, "straight", "Main St"});
+    innerPayload.instructions.push_back({200, "turn-left", "Oak Ave"});
+    innerPayload.instructions.push_back({0, "arrive", ""});
+    innerPayload.total_distance_m = 350;
+    innerPayload.total_time_s = 240;
+
+    uint8_t innerBuf[1024];
+    size_t innerLen = innerPayload.serialize(innerBuf, sizeof(innerBuf));
+
+    ServiceMessage incomingMsg;
+    incomingMsg.msg_type = MessageType::MAP_ROUTE_RESPONSE;
+    incomingMsg.service = "maps";
+    incomingMsg.request_id = 500;
+    incomingMsg.payload.assign(innerBuf, innerLen);
+
+    // Create LXMF payload
+    auto lxmfPayload = createLxmfPayload(incomingMsg);
+
+    // Extract and parse
+    JsonDocument fields;
+    TEST_ASSERT_TRUE(extractServiceFields(lxmfPayload, fields));
+
+    ServiceMessage svcMsg = ServiceMessage::fromFields(fields);
+    TEST_ASSERT_EQUAL(MessageType::MAP_ROUTE_RESPONSE, svcMsg.msg_type);
+    TEST_ASSERT_EQUAL_STRING("maps", svcMsg.service.c_str());
+    TEST_ASSERT_EQUAL(500, svcMsg.request_id);
+
+    // Deserialize payload
+    MapRouteResponsePayload decoded;
+    decoded.deserialize(svcMsg.payload.data(), svcMsg.payload.size());
+
+    TEST_ASSERT_EQUAL(6, decoded.points.size());
+    TEST_ASSERT_EQUAL_INT32(478563210, decoded.points[0]);
+    TEST_ASSERT_EQUAL_INT32(-1224567890, decoded.points[1]);
+    TEST_ASSERT_EQUAL_INT32(478600000, decoded.points[4]);
+
+    TEST_ASSERT_EQUAL(3, decoded.instructions.size());
+    TEST_ASSERT_EQUAL_STRING("straight", decoded.instructions[0].maneuver.c_str());
+    TEST_ASSERT_EQUAL_STRING("Main St", decoded.instructions[0].street.c_str());
+    TEST_ASSERT_EQUAL(150, decoded.instructions[0].distance_m);
+    TEST_ASSERT_EQUAL_STRING("turn-left", decoded.instructions[1].maneuver.c_str());
+    TEST_ASSERT_EQUAL_STRING("arrive", decoded.instructions[2].maneuver.c_str());
+
+    TEST_ASSERT_EQUAL_UINT32(350, decoded.total_distance_m);
+    TEST_ASSERT_EQUAL_UINT32(240, decoded.total_time_s);
+    TEST_ASSERT_TRUE(decoded.error.empty());
+}
+
+void test_route_response_with_error_handling(void) {
+    // Simulate receiving MAP_ROUTE_RESPONSE with error
+    MapRouteResponsePayload innerPayload;
+    innerPayload.error = "No route found between points";
+
+    uint8_t innerBuf[256];
+    size_t innerLen = innerPayload.serialize(innerBuf, sizeof(innerBuf));
+
+    ServiceMessage incomingMsg;
+    incomingMsg.msg_type = MessageType::MAP_ROUTE_RESPONSE;
+    incomingMsg.service = "maps";
+    incomingMsg.request_id = 501;
+    incomingMsg.payload.assign(innerBuf, innerLen);
+
+    // Create LXMF payload
+    auto lxmfPayload = createLxmfPayload(incomingMsg);
+
+    // Extract and parse
+    JsonDocument fields;
+    TEST_ASSERT_TRUE(extractServiceFields(lxmfPayload, fields));
+
+    ServiceMessage svcMsg = ServiceMessage::fromFields(fields);
+    TEST_ASSERT_EQUAL(MessageType::MAP_ROUTE_RESPONSE, svcMsg.msg_type);
+
+    // Deserialize payload
+    MapRouteResponsePayload decoded;
+    decoded.deserialize(svcMsg.payload.data(), svcMsg.payload.size());
+
+    TEST_ASSERT_EQUAL(0, decoded.points.size());
+    TEST_ASSERT_EQUAL(0, decoded.instructions.size());
+    TEST_ASSERT_EQUAL_STRING("No route found between points", decoded.error.c_str());
+}
+
+void test_geocode_response_handling(void) {
+    // Simulate receiving MAP_GEOCODE_RESPONSE with results
+    MapGeocodeResponsePayload innerPayload;
+    innerPayload.query = "Portland";
+    innerPayload.results.push_back({"Portland, OR, USA", 455123456, -1226789012, "city"});
+    innerPayload.results.push_back({"Portland, ME, USA", 436568000, -702580000, "city"});
+
+    uint8_t innerBuf[1024];
+    size_t innerLen = innerPayload.serialize(innerBuf, sizeof(innerBuf));
+
+    ServiceMessage incomingMsg;
+    incomingMsg.msg_type = MessageType::MAP_GEOCODE_RESPONSE;
+    incomingMsg.service = "maps";
+    incomingMsg.request_id = 600;
+    incomingMsg.payload.assign(innerBuf, innerLen);
+
+    // Create LXMF payload
+    auto lxmfPayload = createLxmfPayload(incomingMsg);
+
+    // Extract and parse
+    JsonDocument fields;
+    TEST_ASSERT_TRUE(extractServiceFields(lxmfPayload, fields));
+
+    ServiceMessage svcMsg = ServiceMessage::fromFields(fields);
+    TEST_ASSERT_EQUAL(MessageType::MAP_GEOCODE_RESPONSE, svcMsg.msg_type);
+    TEST_ASSERT_EQUAL_STRING("maps", svcMsg.service.c_str());
+    TEST_ASSERT_EQUAL(600, svcMsg.request_id);
+
+    // Deserialize payload
+    MapGeocodeResponsePayload decoded;
+    decoded.deserialize(svcMsg.payload.data(), svcMsg.payload.size());
+
+    TEST_ASSERT_EQUAL_STRING("Portland", decoded.query.c_str());
+    TEST_ASSERT_EQUAL(2, decoded.results.size());
+    TEST_ASSERT_EQUAL_STRING("Portland, OR, USA", decoded.results[0].display_name.c_str());
+    TEST_ASSERT_EQUAL_INT32(455123456, decoded.results[0].lat);
+    TEST_ASSERT_EQUAL_INT32(-1226789012, decoded.results[0].lon);
+    TEST_ASSERT_EQUAL_STRING("city", decoded.results[0].type.c_str());
+    TEST_ASSERT_EQUAL_STRING("Portland, ME, USA", decoded.results[1].display_name.c_str());
+    TEST_ASSERT_TRUE(decoded.error.empty());
+}
+
+// ============================================================================
 // Message Type Routing Tests
 // ============================================================================
 
@@ -504,6 +673,12 @@ void test_message_type_routing(void) {
         {MessageType::NTP_RESPONSE, "ntp"},
         {MessageType::SEARCH_REQUEST, "search"},
         {MessageType::SEARCH_RESPONSE, "search"},
+        {MessageType::MAP_TILE_REQUEST, "maps"},
+        {MessageType::MAP_TILE_RESPONSE, "maps"},
+        {MessageType::MAP_ROUTE_REQUEST, "maps"},
+        {MessageType::MAP_ROUTE_RESPONSE, "maps"},
+        {MessageType::MAP_GEOCODE_REQUEST, "maps"},
+        {MessageType::MAP_GEOCODE_RESPONSE, "maps"},
     };
 
     for (const auto& tc : cases) {
@@ -594,6 +769,12 @@ int main(int argc, char **argv) {
     RUN_TEST(test_search_response_with_error);
     RUN_TEST(test_search_response_empty_results);
     RUN_TEST(test_search_response_with_ai_summary);
+
+    // Route/Geocode workflow tests
+    RUN_TEST(test_route_request_message_generation);
+    RUN_TEST(test_route_response_handling);
+    RUN_TEST(test_route_response_with_error_handling);
+    RUN_TEST(test_geocode_response_handling);
 
     // Message routing tests
     RUN_TEST(test_message_type_routing);
