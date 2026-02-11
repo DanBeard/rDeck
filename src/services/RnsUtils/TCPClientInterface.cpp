@@ -312,8 +312,23 @@ void TCPClientInterface::processFrame() {
 
 void TCPClientInterface::send_outgoing(const Bytes& data) {
     if (!_connected) {
-        Serial.println("[TCP] Cannot send: not connected");
-        return;
+        // Attempt immediate reconnect if cooldown has elapsed
+        unsigned long now = millis();
+        if (strlen(_host) > 0 &&
+            (now - _lastConnectAttempt > RECONNECT_INTERVAL_MIN || now < _lastConnectAttempt)) {
+            Serial.println("[TCP] Send requested while disconnected, attempting reconnect...");
+            _lastConnectAttempt = now;
+            if (start(_host, _port)) {
+                _reconnectInterval = RECONNECT_INTERVAL_MIN;
+                // Fall through to send below
+            } else {
+                Serial.println("[TCP] Cannot send: reconnect failed");
+                return;
+            }
+        } else {
+            Serial.println("[TCP] Cannot send: not connected (retry cooldown)");
+            return;
+        }
     }
 
     // Notify service of activity
