@@ -44,6 +44,7 @@ public:
     void tick(RNS::Interface& interface);
 
     bool isConnected() const { return _connected; }
+    bool hasHost() const { return strlen(_host) > 0; }
 
     virtual inline std::string toString() const { return "TCPClientInterface[" + _name + "]"; }
 
@@ -84,9 +85,11 @@ private:
     bool _inEscape = false;
     bool _inFrame = false;
 
-    // Reconnection handling
+    // Reconnection handling with capped exponential backoff
     unsigned long _lastConnectAttempt = 0;
-    static const unsigned long RECONNECT_INTERVAL = 10000;  // 10 seconds
+    unsigned long _reconnectInterval = RECONNECT_INTERVAL_MIN;
+    static constexpr unsigned long RECONNECT_INTERVAL_MIN = 5000;    // Start at 5s
+    static constexpr unsigned long RECONNECT_INTERVAL_MAX = 300000;  // Cap at 5 min
 };
 
 }}  // namespace RNS::Interfaces

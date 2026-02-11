@@ -134,16 +134,20 @@ void TCPClientInterface::tick(RNS::Interface& interface) {
         _online = false;
     }
 
-    // Attempt reconnection if needed
+    // Attempt reconnection if needed (exponential backoff)
     if (!_connected && strlen(_host) > 0) {
         unsigned long now = millis();
-        if (now - _lastConnectAttempt > RECONNECT_INTERVAL || now < _lastConnectAttempt) {
+        if (now - _lastConnectAttempt > _reconnectInterval || now < _lastConnectAttempt) {
             _lastConnectAttempt = now;
-            Serial.printf("[TCP] Attempting reconnection to %s:%d\n", _host, _port);
+            Serial.printf("[TCP] Attempting reconnection to %s:%d (next retry in %lus)\n",
+                _host, _port, _reconnectInterval * 2 / 1000);
             if (_client.connect(_host, _port)) {
                 _connected = true;
                 _online = true;
+                _reconnectInterval = RECONNECT_INTERVAL_MIN;
                 Serial.println("[TCP] Reconnected");
+            } else {
+                _reconnectInterval = std::min(_reconnectInterval * 2, RECONNECT_INTERVAL_MAX);
             }
         }
         return;
@@ -182,13 +186,18 @@ void TCPClientInterface::tick(RNS::Interface& interface) {
         }
     }
 
-    // Attempt reconnection if needed
+    // Attempt reconnection if needed (exponential backoff)
     if (!_connected && strlen(_host) > 0) {
         unsigned long now = millis();
-        if (now - _lastConnectAttempt > RECONNECT_INTERVAL || now < _lastConnectAttempt) {
+        if (now - _lastConnectAttempt > _reconnectInterval || now < _lastConnectAttempt) {
             _lastConnectAttempt = now;
-            Serial.printf("[TCP] Attempting reconnection to %s:%d\n", _host, _port);
-            start(_host, _port);
+            Serial.printf("[TCP] Attempting reconnection to %s:%d (next retry in %lus)\n",
+                _host, _port, _reconnectInterval * 2 / 1000);
+            if (start(_host, _port)) {
+                _reconnectInterval = RECONNECT_INTERVAL_MIN;
+            } else {
+                _reconnectInterval = std::min(_reconnectInterval * 2, RECONNECT_INTERVAL_MAX);
+            }
         }
         return;
     }

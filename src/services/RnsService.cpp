@@ -403,15 +403,18 @@ void RnsService::tick(const unsigned long tMillis) {
     // Tick the active interface
     if (_interfaceMode == InterfaceMode::TCP) {
         if (tcp_interface_impl) {
-            // Check if WiFi connected and TCP needs to start
-            WifiService* wifiSvc = _retos->fetchService<WifiService>();
-            if (wifiSvc && wifiSvc->isConnected() && !tcp_interface_impl->isConnected()) {
-                JsonObject netSettings = Settings::getSettings(WifiService::settingsSection);
-                const char* tcpHost = netSettings["tcp_host"] | "";
-                uint16_t tcpPort = netSettings["tcp_port"] | 4242;
-                if (strlen(tcpHost) > 0) {
-                    Serial.printf("[RNS] WiFi connected, attempting TCP connection to %s:%d\n", tcpHost, tcpPort);
-                    tcp_interface_impl->start(tcpHost, tcpPort);
+            // Initial TCP start: configure host/port once, then let
+            // TCPClientInterface::tick() handle reconnection with backoff
+            if (!tcp_interface_impl->hasHost()) {
+                WifiService* wifiSvc = _retos->fetchService<WifiService>();
+                if (wifiSvc && wifiSvc->isConnected()) {
+                    JsonObject netSettings = Settings::getSettings(WifiService::settingsSection);
+                    const char* tcpHost = netSettings["tcp_host"] | "";
+                    uint16_t tcpPort = netSettings["tcp_port"] | 4242;
+                    if (strlen(tcpHost) > 0) {
+                        Serial.printf("[RNS] Starting TCP to %s:%d\n", tcpHost, tcpPort);
+                        tcp_interface_impl->start(tcpHost, tcpPort);
+                    }
                 }
             }
             tcp_interface_impl->tick(tcp_interface);
