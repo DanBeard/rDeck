@@ -208,6 +208,7 @@ struct MapRouteInstruction {
     uint32_t distance_m;    // Distance in meters to this maneuver
     std::string maneuver;   // "turn-left", "turn-right", "straight", "arrive", etc.
     std::string street;     // Street name (may be empty)
+    uint16_t bearing;       // Compass bearing after maneuver (0-360, 0=north)
 };
 
 /**

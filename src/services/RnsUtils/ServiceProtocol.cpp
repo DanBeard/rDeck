@@ -265,6 +265,7 @@ void MapRouteResponsePayload::deserialize(const uint8_t* data, size_t len) {
             inst.distance_m = arr[i]["distance_m"] | 0;
             inst.maneuver = safeGetString(arr[i]["maneuver"]);
             inst.street = safeGetString(arr[i]["street"]);
+            inst.bearing = arr[i]["bearing"] | 0;
             instructions.push_back(inst);
         }
     }
@@ -289,6 +290,7 @@ size_t MapRouteResponsePayload::serialize(uint8_t* buffer, size_t maxLen) const 
         obj["distance_m"] = inst.distance_m;
         obj["maneuver"] = inst.maneuver;
         obj["street"] = inst.street;
+        obj["bearing"] = inst.bearing;
     }
 
     return serializeMsgPack(doc, buffer, maxLen);

@@ -189,6 +189,17 @@ void Maps::drawUI() {
     lv_label_set_text_fmt(_coords_label, "%.4f, %.4f", _centerLat, _centerLon);
     lv_obj_set_style_text_font(_coords_label, &lv_font_montserrat_14, LV_PART_MAIN);
 
+    // Compass label overlay (top-left of map, hidden until heading available)
+    _compass_label = lv_label_create(main);
+    lv_label_set_text(_compass_label, "");
+    lv_obj_set_style_text_font(_compass_label, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_set_style_text_color(_compass_label, lv_color_black(), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(_compass_label, lv_color_hex(0xEEEEEE), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(_compass_label, LV_OPA_80, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(_compass_label, 2, LV_PART_MAIN);
+    lv_obj_align(_compass_label, LV_ALIGN_TOP_LEFT, 2, 2);
+    lv_obj_add_flag(_compass_label, LV_OBJ_FLAG_HIDDEN);
+
     // Loading spinner (hidden by default)
     _loading_spinner = lv_spinner_create(main, 1000, 60);
     lv_obj_set_size(_loading_spinner, 30, 30);
@@ -1102,6 +1113,14 @@ void Maps::displayRoute(const Retcon::Service::MapRouteResponsePayload& response
     _routeTotalTimeS = response.total_time_s;
     _hasRoute = true;
 
+    Serial.printf("[Maps] Route: %zu instructions, dist=%um\n",
+                  response.instructions.size(), response.total_distance_m);
+    for (size_t i = 0; i < response.instructions.size(); i++) {
+        const auto& inst = response.instructions[i];
+        Serial.printf("[Maps]   [%zu] maneuver='%s' street='%s' dist=%um\n",
+                      i, inst.maneuver.c_str(), inst.street.c_str(), inst.distance_m);
+    }
+
     populateDirections();
     renderMap();
 
@@ -1109,6 +1128,8 @@ void Maps::displayRoute(const Retcon::Service::MapRouteResponsePayload& response
     if (_directions_overlay) {
         _showingDirections = true;
         lv_obj_clear_flag(_directions_overlay, LV_OBJ_FLAG_HIDDEN);
+        lv_group_add_obj(_retos->ui()->default_input_group(), _directions_list);
+        lv_group_focus_obj(_directions_list);
     }
 }
 
@@ -1123,7 +1144,7 @@ void Maps::drawDirectionsOverlay() {
     lv_obj_t* main = lv_obj_get_parent(_map_canvas);
 
     _directions_overlay = lv_obj_create(main);
-    lv_obj_set_size(_directions_overlay, LV_PCT(90), LV_PCT(80));
+    lv_obj_set_size(_directions_overlay, LV_PCT(100), LV_PCT(90));
     lv_obj_align(_directions_overlay, LV_ALIGN_CENTER, 0, 0);
     lv_obj_set_style_bg_color(_directions_overlay, lv_color_white(), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(_directions_overlay, LV_OPA_100, LV_PART_MAIN);
@@ -1146,6 +1167,8 @@ void Maps::drawDirectionsOverlay() {
     lv_obj_set_size(_directions_list, LV_PCT(100), LV_PCT(100));
     lv_obj_set_flex_grow(_directions_list, 1);
     lv_obj_set_style_pad_all(_directions_list, 2, LV_PART_MAIN);
+    lv_obj_set_scroll_dir(_directions_list, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(_directions_list, LV_SCROLLBAR_MODE_AUTO);
 
     // Recalculate button
     _directions_recalc_btn = lv_btn_create(_directions_overlay);
@@ -1188,6 +1211,8 @@ void Maps::requestDirections() {
         lv_label_set_text(_directions_summary, "Calculating route...");
         lv_obj_clean(_directions_list);
         lv_obj_add_flag(_directions_recalc_btn, LV_OBJ_FLAG_HIDDEN);
+        lv_group_add_obj(_retos->ui()->default_input_group(), _directions_list);
+        lv_group_focus_obj(_directions_list);
     }
 
     calculateRoute();
@@ -1214,7 +1239,16 @@ void Maps::populateDirections() {
             snprintf(summary, sizeof(summary), "%u m  %u min", _routeTotalDistanceM, _routeTotalTimeS / 60);
         }
     }
-    lv_label_set_text(_directions_summary, summary);
+    // Append current heading to summary if available
+    if (_hasHeading) {
+        static const char* cardinals[] = {"N", "NE", "E", "SE", "S", "SW", "W", "NW"};
+        int idx = (((int)_gpsHeading + 22) / 45) % 8;
+        char full[96];
+        snprintf(full, sizeof(full), "%s  |  Facing %s", summary, cardinals[idx]);
+        lv_label_set_text(_directions_summary, full);
+    } else {
+        lv_label_set_text(_directions_summary, summary);
+    }
 
     // Populate instruction list
     lv_obj_clean(_directions_list);
@@ -1240,20 +1274,94 @@ void Maps::populateDirections() {
             icon = LV_SYMBOL_REFRESH;
         }
 
-        // Format: "icon Street (distance)"
-        char text[128];
-        std::string street = inst.street.empty() ? inst.maneuver : inst.street;
-        if (street.length() > 25) {
-            street = street.substr(0, 22) + "...";
+        // Map maneuver type to human-readable action
+        const char* action = "Continue";
+        const std::string& m = inst.maneuver;
+        if (m == "start" || m == "start-right" || m == "start-left") {
+            action = "Head";
+        } else if (m == "turn-left") {
+            action = "Turn left";
+        } else if (m == "turn-right") {
+            action = "Turn right";
+        } else if (m == "turn-slight-left") {
+            action = "Slight left";
+        } else if (m == "turn-slight-right") {
+            action = "Slight right";
+        } else if (m == "turn-sharp-left") {
+            action = "Sharp left";
+        } else if (m == "turn-sharp-right") {
+            action = "Sharp right";
+        } else if (m == "u-turn-left" || m == "u-turn-right") {
+            action = "U-turn";
+        } else if (m == "continue" || m == "straight") {
+            action = "Continue";
+        } else if (m == "stay-straight") {
+            action = "Stay straight";
+        } else if (m == "stay-left") {
+            action = "Stay left";
+        } else if (m == "stay-right") {
+            action = "Stay right";
+        } else if (m == "ramp-straight") {
+            action = "Take ramp";
+        } else if (m == "ramp-left") {
+            action = "Ramp left";
+        } else if (m == "ramp-right") {
+            action = "Ramp right";
+        } else if (m == "exit-left") {
+            action = "Exit left";
+        } else if (m == "exit-right") {
+            action = "Exit right";
+        } else if (m == "merge") {
+            action = "Merge";
+        } else if (m == "roundabout-enter") {
+            action = "Enter roundabout";
+        } else if (m == "roundabout-exit") {
+            action = "Exit roundabout";
+        } else if (m == "ferry-enter") {
+            action = "Take ferry";
+        } else if (m == "ferry-exit") {
+            action = "Exit ferry";
+        } else if (m == "destination" || m == "destination-left" || m == "destination-right") {
+            action = "Arrive";
         }
 
+        // Convert bearing to cardinal direction
+        const char* cardinal = "";
+        if (inst.bearing < 360) {  // 0 = unset for destination
+            static const char* cardinals[] = {"N", "NE", "E", "SE", "S", "SW", "W", "NW"};
+            int idx = ((inst.bearing + 22) / 45) % 8;
+            cardinal = cardinals[idx];
+        }
+
+        // Build instruction: "Action on Street (distance)" or "Action (distance)"
+        char text[192];
+        std::string street = inst.street;
+        if (street.length() > 20) {
+            street = street.substr(0, 17) + "...";
+        }
+
+        char dist[16];
         if (inst.distance_m >= 1000) {
-            snprintf(text, sizeof(text), "%s %s (%.1fkm)", icon, street.c_str(), inst.distance_m / 1000.0f);
+            snprintf(dist, sizeof(dist), "%.1fkm", inst.distance_m / 1000.0f);
         } else {
-            snprintf(text, sizeof(text), "%s %s (%um)", icon, street.c_str(), inst.distance_m);
+            snprintf(dist, sizeof(dist), "%um", inst.distance_m);
         }
 
-        lv_list_add_btn(_directions_list, NULL, text);
+        if (!street.empty()) {
+            snprintf(text, sizeof(text), "%s %s %s on %s\n   %s", icon, action, cardinal, street.c_str(), dist);
+        } else if (cardinal[0]) {
+            snprintf(text, sizeof(text), "%s %s %s\n   %s", icon, action, cardinal, dist);
+        } else {
+            snprintf(text, sizeof(text), "%s %s\n   %s", icon, action, dist);
+        }
+
+        lv_obj_t* btn = lv_list_add_btn(_directions_list, NULL, text);
+        // Wrap text instead of scrolling, and allow button to grow vertically
+        lv_obj_t* label = lv_obj_get_child(btn, 0);
+        if (label) {
+            lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
+        }
+        lv_obj_set_height(btn, LV_SIZE_CONTENT);
     }
 
     // Show recalculate button
@@ -1273,11 +1381,14 @@ void Maps::toggleDirections() {
         // Show directions overlay
         if (_directions_overlay) {
             lv_obj_clear_flag(_directions_overlay, LV_OBJ_FLAG_HIDDEN);
+            lv_group_add_obj(_retos->ui()->default_input_group(), _directions_list);
+            lv_group_focus_obj(_directions_list);
         }
     } else {
         // Hide directions overlay, show map
         if (_directions_overlay) {
             lv_obj_add_flag(_directions_overlay, LV_OBJ_FLAG_HIDDEN);
+            lv_group_remove_obj(_directions_list);
         }
         renderMap();
     }
@@ -1383,6 +1494,7 @@ void Maps::clearDirections() {
 
     if (_directions_overlay) {
         lv_obj_add_flag(_directions_overlay, LV_OBJ_FLAG_HIDDEN);
+        lv_group_remove_obj(_directions_list);
     }
 
     clearRoute();
@@ -1446,6 +1558,19 @@ EventStatus Maps::onEvent(const Event& event) {
             _gpsHeading = event.args[2] / 100.0f;
             _hasHeading = (event.args[3] != 0);
             _hasGps = true;
+
+            // Update compass overlay on map
+            if (_compass_label) {
+                if (_hasHeading) {
+                    static const char* cardinals[] = {"N", "NE", "E", "SE", "S", "SW", "W", "NW"};
+                    int idx = (((int)_gpsHeading + 22) / 45) % 8;
+                    lv_label_set_text_fmt(_compass_label, LV_SYMBOL_GPS " %s %d",
+                                          cardinals[idx], (int)_gpsHeading);
+                    lv_obj_clear_flag(_compass_label, LV_OBJ_FLAG_HIDDEN);
+                } else {
+                    lv_obj_add_flag(_compass_label, LV_OBJ_FLAG_HIDDEN);
+                }
+            }
 
             if (_followGps) {
                 _centerLat = _gpsLat;

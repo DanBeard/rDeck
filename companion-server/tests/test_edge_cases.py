@@ -860,10 +860,11 @@ class TestMapsCrossCompatibility:
         data = msgpack.unpackb(encoded, raw=False)
 
         inst = data["instructions"][0]
-        assert set(inst.keys()) == {"distance_m", "maneuver", "street"}
+        assert set(inst.keys()) == {"distance_m", "maneuver", "street", "bearing"}
         assert isinstance(inst["distance_m"], int)
         assert isinstance(inst["maneuver"], str)
         assert isinstance(inst["street"], str)
+        assert isinstance(inst["bearing"], int)
 
 
 # ============================================================

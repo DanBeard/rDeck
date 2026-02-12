@@ -144,7 +144,7 @@ def _encode_payload(msg_type: MessageType, payload: Any) -> bytes:
     elif msg_type == MessageType.MAP_ROUTE_RESPONSE:
         p: MapRouteResponsePayload = payload
         instructions = [
-            {"distance_m": i.distance_m, "maneuver": i.maneuver, "street": i.street}
+            {"distance_m": i.distance_m, "maneuver": i.maneuver, "street": i.street, "bearing": i.bearing}
             for i in p.instructions
         ]
         data = {
@@ -261,6 +261,7 @@ def _decode_payload(msg_type: MessageType, payload_bytes: bytes) -> Any:
                 distance_m=i.get("distance_m", 0),
                 maneuver=i.get("maneuver", ""),
                 street=i.get("street", ""),
+                bearing=i.get("bearing", 0),
             )
             for i in data.get("instructions", [])
         ]

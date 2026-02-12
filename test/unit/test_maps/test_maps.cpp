@@ -19,6 +19,8 @@
 #include <vector>
 #include <cstdint>
 #include <algorithm>
+#include <string>
+#include <cstdio>
 
 // ---------------------------------------------------------------------------
 // Standalone reimplementations of Maps pure-logic functions
@@ -507,6 +509,244 @@ void test_zoom_below_minimum_clamps(void) {
 }
 
 // ============================================================================
+// I. Direction Instruction Formatting
+// ============================================================================
+
+// Reimplementation of Maps::populateDirections text formatting logic.
+// Tests the maneuver→action mapping and instruction string generation
+// identically to Maps.cpp, but free of LVGL dependencies.
+
+static const char* maneuverToAction(const std::string& m) {
+    if (m == "start" || m == "start-right" || m == "start-left") {
+        return "Head";
+    } else if (m == "turn-left") {
+        return "Turn left";
+    } else if (m == "turn-right") {
+        return "Turn right";
+    } else if (m == "turn-slight-left") {
+        return "Slight left";
+    } else if (m == "turn-slight-right") {
+        return "Slight right";
+    } else if (m == "turn-sharp-left") {
+        return "Sharp left";
+    } else if (m == "turn-sharp-right") {
+        return "Sharp right";
+    } else if (m == "u-turn-left" || m == "u-turn-right") {
+        return "U-turn";
+    } else if (m == "continue" || m == "straight") {
+        return "Continue";
+    } else if (m == "stay-straight") {
+        return "Stay straight";
+    } else if (m == "stay-left") {
+        return "Stay left";
+    } else if (m == "stay-right") {
+        return "Stay right";
+    } else if (m == "ramp-straight") {
+        return "Take ramp";
+    } else if (m == "ramp-left") {
+        return "Ramp left";
+    } else if (m == "ramp-right") {
+        return "Ramp right";
+    } else if (m == "exit-left") {
+        return "Exit left";
+    } else if (m == "exit-right") {
+        return "Exit right";
+    } else if (m == "merge") {
+        return "Merge";
+    } else if (m == "roundabout-enter") {
+        return "Enter roundabout";
+    } else if (m == "roundabout-exit") {
+        return "Exit roundabout";
+    } else if (m == "ferry-enter") {
+        return "Take ferry";
+    } else if (m == "ferry-exit") {
+        return "Exit ferry";
+    } else if (m == "destination" || m == "destination-left" || m == "destination-right") {
+        return "Arrive";
+    }
+    return "Continue";
+}
+
+// Format the instruction text (without the LVGL icon prefix).
+// Returns the formatted string identical to what Maps::populateDirections builds.
+static std::string formatInstruction(const std::string& maneuver,
+                                     const std::string& streetName,
+                                     uint32_t distance_m) {
+    const char* action = maneuverToAction(maneuver);
+
+    std::string street = streetName;
+    if (street.length() > 20) {
+        street = street.substr(0, 17) + "...";
+    }
+
+    char dist[16];
+    if (distance_m >= 1000) {
+        snprintf(dist, sizeof(dist), "%.1fkm", distance_m / 1000.0f);
+    } else {
+        snprintf(dist, sizeof(dist), "%um", distance_m);
+    }
+
+    char text[160];
+    if (!street.empty()) {
+        snprintf(text, sizeof(text), "%s on %s (%s)", action, street.c_str(), dist);
+    } else {
+        snprintf(text, sizeof(text), "%s (%s)", action, dist);
+    }
+    return std::string(text);
+}
+
+// --- Maneuver-to-action mapping tests ---
+
+void test_maneuver_turn_left(void) {
+    TEST_ASSERT_EQUAL_STRING("Turn left", maneuverToAction("turn-left"));
+}
+
+void test_maneuver_turn_right(void) {
+    TEST_ASSERT_EQUAL_STRING("Turn right", maneuverToAction("turn-right"));
+}
+
+void test_maneuver_slight_turns(void) {
+    TEST_ASSERT_EQUAL_STRING("Slight left", maneuverToAction("turn-slight-left"));
+    TEST_ASSERT_EQUAL_STRING("Slight right", maneuverToAction("turn-slight-right"));
+}
+
+void test_maneuver_sharp_turns(void) {
+    TEST_ASSERT_EQUAL_STRING("Sharp left", maneuverToAction("turn-sharp-left"));
+    TEST_ASSERT_EQUAL_STRING("Sharp right", maneuverToAction("turn-sharp-right"));
+}
+
+void test_maneuver_u_turns(void) {
+    TEST_ASSERT_EQUAL_STRING("U-turn", maneuverToAction("u-turn-left"));
+    TEST_ASSERT_EQUAL_STRING("U-turn", maneuverToAction("u-turn-right"));
+}
+
+void test_maneuver_start_variants(void) {
+    TEST_ASSERT_EQUAL_STRING("Head", maneuverToAction("start"));
+    TEST_ASSERT_EQUAL_STRING("Head", maneuverToAction("start-left"));
+    TEST_ASSERT_EQUAL_STRING("Head", maneuverToAction("start-right"));
+}
+
+void test_maneuver_destination_variants(void) {
+    TEST_ASSERT_EQUAL_STRING("Arrive", maneuverToAction("destination"));
+    TEST_ASSERT_EQUAL_STRING("Arrive", maneuverToAction("destination-left"));
+    TEST_ASSERT_EQUAL_STRING("Arrive", maneuverToAction("destination-right"));
+}
+
+void test_maneuver_continue_variants(void) {
+    TEST_ASSERT_EQUAL_STRING("Continue", maneuverToAction("continue"));
+    TEST_ASSERT_EQUAL_STRING("Continue", maneuverToAction("straight"));
+}
+
+void test_maneuver_stay_variants(void) {
+    TEST_ASSERT_EQUAL_STRING("Stay straight", maneuverToAction("stay-straight"));
+    TEST_ASSERT_EQUAL_STRING("Stay left", maneuverToAction("stay-left"));
+    TEST_ASSERT_EQUAL_STRING("Stay right", maneuverToAction("stay-right"));
+}
+
+void test_maneuver_ramp_variants(void) {
+    TEST_ASSERT_EQUAL_STRING("Take ramp", maneuverToAction("ramp-straight"));
+    TEST_ASSERT_EQUAL_STRING("Ramp left", maneuverToAction("ramp-left"));
+    TEST_ASSERT_EQUAL_STRING("Ramp right", maneuverToAction("ramp-right"));
+}
+
+void test_maneuver_exit_variants(void) {
+    TEST_ASSERT_EQUAL_STRING("Exit left", maneuverToAction("exit-left"));
+    TEST_ASSERT_EQUAL_STRING("Exit right", maneuverToAction("exit-right"));
+}
+
+void test_maneuver_merge(void) {
+    TEST_ASSERT_EQUAL_STRING("Merge", maneuverToAction("merge"));
+}
+
+void test_maneuver_roundabout(void) {
+    TEST_ASSERT_EQUAL_STRING("Enter roundabout", maneuverToAction("roundabout-enter"));
+    TEST_ASSERT_EQUAL_STRING("Exit roundabout", maneuverToAction("roundabout-exit"));
+}
+
+void test_maneuver_ferry(void) {
+    TEST_ASSERT_EQUAL_STRING("Take ferry", maneuverToAction("ferry-enter"));
+    TEST_ASSERT_EQUAL_STRING("Exit ferry", maneuverToAction("ferry-exit"));
+}
+
+void test_maneuver_unknown_defaults_to_continue(void) {
+    TEST_ASSERT_EQUAL_STRING("Continue", maneuverToAction(""));
+    TEST_ASSERT_EQUAL_STRING("Continue", maneuverToAction("none"));
+    TEST_ASSERT_EQUAL_STRING("Continue", maneuverToAction("becomes"));
+    TEST_ASSERT_EQUAL_STRING("Continue", maneuverToAction("something-unexpected"));
+}
+
+// --- Full instruction formatting tests ---
+
+void test_format_with_street_and_meters(void) {
+    std::string result = formatInstruction("turn-left", "Main Street", 250);
+    TEST_ASSERT_EQUAL_STRING("Turn left on Main Street (250m)", result.c_str());
+}
+
+void test_format_with_street_and_km(void) {
+    std::string result = formatInstruction("turn-right", "Oak Avenue", 1500);
+    TEST_ASSERT_EQUAL_STRING("Turn right on Oak Avenue (1.5km)", result.c_str());
+}
+
+void test_format_without_street(void) {
+    std::string result = formatInstruction("turn-left", "", 300);
+    TEST_ASSERT_EQUAL_STRING("Turn left (300m)", result.c_str());
+}
+
+void test_format_start_no_street(void) {
+    std::string result = formatInstruction("start-left", "", 0);
+    TEST_ASSERT_EQUAL_STRING("Head (0m)", result.c_str());
+}
+
+void test_format_destination(void) {
+    std::string result = formatInstruction("destination", "123 Elm St", 0);
+    TEST_ASSERT_EQUAL_STRING("Arrive on 123 Elm St (0m)", result.c_str());
+}
+
+void test_format_long_street_truncated(void) {
+    std::string result = formatInstruction("continue", "North Michigan Avenue Boulevard", 800);
+    // 31 chars > 20, truncated to 17 + "..."
+    TEST_ASSERT_EQUAL_STRING("Continue on North Michigan Av... (800m)", result.c_str());
+}
+
+void test_format_street_exactly_20_chars(void) {
+    // Exactly 20 chars — should NOT be truncated
+    std::string street = "12345678901234567890";
+    TEST_ASSERT_EQUAL(20, street.length());
+    std::string result = formatInstruction("turn-right", street, 100);
+    TEST_ASSERT_EQUAL_STRING("Turn right on 12345678901234567890 (100m)", result.c_str());
+}
+
+void test_format_street_21_chars_truncated(void) {
+    // 21 chars — should be truncated to 17 + "..."
+    std::string street = "123456789012345678901";
+    TEST_ASSERT_EQUAL(21, street.length());
+    std::string result = formatInstruction("turn-left", street, 500);
+    TEST_ASSERT_EQUAL_STRING("Turn left on 12345678901234567... (500m)", result.c_str());
+}
+
+void test_format_roundabout_with_street(void) {
+    std::string result = formatInstruction("roundabout-enter", "Circle Drive", 80);
+    TEST_ASSERT_EQUAL_STRING("Enter roundabout on Circle Drive (80m)", result.c_str());
+}
+
+void test_format_km_boundary(void) {
+    // Exactly 1000m should show as km
+    std::string result = formatInstruction("continue", "", 1000);
+    TEST_ASSERT_EQUAL_STRING("Continue (1.0km)", result.c_str());
+}
+
+void test_format_999m_stays_meters(void) {
+    std::string result = formatInstruction("continue", "", 999);
+    TEST_ASSERT_EQUAL_STRING("Continue (999m)", result.c_str());
+}
+
+void test_format_large_distance(void) {
+    std::string result = formatInstruction("merge", "I-90", 12500);
+    TEST_ASSERT_EQUAL_STRING("Merge on I-90 (12.5km)", result.c_str());
+}
+
+
+// ============================================================================
 // Test Runner
 // ============================================================================
 
@@ -564,6 +804,37 @@ int main(int argc, char** argv) {
     RUN_TEST(test_zoom_at_max_cannot_increase);
     RUN_TEST(test_zoom_normal_increase);
     RUN_TEST(test_zoom_below_minimum_clamps);
+
+    // I. Direction Instruction Formatting — maneuver mapping
+    RUN_TEST(test_maneuver_turn_left);
+    RUN_TEST(test_maneuver_turn_right);
+    RUN_TEST(test_maneuver_slight_turns);
+    RUN_TEST(test_maneuver_sharp_turns);
+    RUN_TEST(test_maneuver_u_turns);
+    RUN_TEST(test_maneuver_start_variants);
+    RUN_TEST(test_maneuver_destination_variants);
+    RUN_TEST(test_maneuver_continue_variants);
+    RUN_TEST(test_maneuver_stay_variants);
+    RUN_TEST(test_maneuver_ramp_variants);
+    RUN_TEST(test_maneuver_exit_variants);
+    RUN_TEST(test_maneuver_merge);
+    RUN_TEST(test_maneuver_roundabout);
+    RUN_TEST(test_maneuver_ferry);
+    RUN_TEST(test_maneuver_unknown_defaults_to_continue);
+
+    // I. Direction Instruction Formatting — full text output
+    RUN_TEST(test_format_with_street_and_meters);
+    RUN_TEST(test_format_with_street_and_km);
+    RUN_TEST(test_format_without_street);
+    RUN_TEST(test_format_start_no_street);
+    RUN_TEST(test_format_destination);
+    RUN_TEST(test_format_long_street_truncated);
+    RUN_TEST(test_format_street_exactly_20_chars);
+    RUN_TEST(test_format_street_21_chars_truncated);
+    RUN_TEST(test_format_roundabout_with_street);
+    RUN_TEST(test_format_km_boundary);
+    RUN_TEST(test_format_999m_stays_meters);
+    RUN_TEST(test_format_large_distance);
 
     return UNITY_END();
 }

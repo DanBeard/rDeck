@@ -414,6 +414,16 @@ class MapsService(BaseService):
                 },
             }
 
+            # Prefer named roads over walkways/alleys for pedestrian routing
+            if costing == "pedestrian":
+                request_body["costing_options"] = {
+                    "pedestrian": {
+                        "use_roads": 1.0,
+                        "walkway_factor": 10.0,
+                        "alley_factor": 10.0,
+                    }
+                }
+
             response = self._http_client.post(
                 f"{valhalla_url}/route",
                 json=request_body,
@@ -472,10 +482,34 @@ class MapsService(BaseService):
             instructions = []
             for leg in legs:
                 for maneuver in leg.get("maneuvers", []):
+                    # Prefer street_names (road you turn onto), fall back to
+                    # begin_street_names (road you're currently on), then
+                    # extract from Valhalla's instruction text as last resort
+                    street = ""
+                    if maneuver.get("street_names"):
+                        street = maneuver["street_names"][0]
+                    elif maneuver.get("begin_street_names"):
+                        street = maneuver["begin_street_names"][0]
+                    elif maneuver.get("instruction"):
+                        # Extract location from "Turn right onto the walkway."
+                        # or "Walk north on West Adams Street."
+                        import re
+                        m = re.search(
+                            r'\b(?:on(?:to)?|at)\s+(.+?)(?:\.|$)',
+                            maneuver["instruction"],
+                        )
+                        if m:
+                            extracted = m.group(1).split(".")[0].strip()
+                            # Take first street if multiple (e.g. "West Adams Street/US 66 Hist")
+                            if "/" in extracted:
+                                extracted = extracted.split("/")[0].strip()
+                            street = extracted
+
                     instructions.append(MapRouteInstruction(
-                        distance_m=int(maneuver.get("length", 0) * 1000),  # km to m
+                        distance_m=int(maneuver.get("length", 0) * 1000),
                         maneuver=self.VALHALLA_MANEUVER_TYPES.get(maneuver.get("type", 0), "continue"),
-                        street=maneuver.get("street_names", [""])[0] if maneuver.get("street_names") else "",
+                        street=street,
+                        bearing=maneuver.get("bearing_after", 0),
                     ))
 
             return MapRouteResponsePayload(
@@ -549,6 +583,13 @@ class MapsService(BaseService):
             return truncated[:last_comma]
         return truncated.rstrip() + "..."
 
+    @staticmethod
+    def _geo_distance_sq(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+        """Approximate squared distance between two points (for sorting only)."""
+        dlat = lat1 - lat2
+        dlon = (lon1 - lon2) * 0.7  # rough cos(lat) correction for mid-latitudes
+        return dlat * dlat + dlon * dlon
+
     def _handle_geocode_request(self, payload: MapGeocodeRequestPayload) -> MapGeocodeResponsePayload:
         """Handle geocoding request via Nominatim.
 
@@ -570,20 +611,30 @@ class MapsService(BaseService):
             # Cap results to keep response within single link packet
             max_results = min(payload.max_results, 3)
 
+            has_bias = (
+                payload.bias_lat is not None
+                and payload.bias_lon is not None
+            )
+            bias_lat = payload.bias_lat / 1e7 if has_bias else 0.0
+            bias_lon = payload.bias_lon / 1e7 if has_bias else 0.0
+
+            # Fetch extra candidates from Nominatim so we can re-rank by proximity
+            fetch_limit = max(10, max_results * 3)
+
             params = {
                 "q": payload.query,
                 "format": "json",
-                "limit": max_results,
+                "limit": fetch_limit,
                 "addressdetails": 1,
             }
 
-            # Add viewbox bias if coordinates provided
-            if payload.bias_lat is not None and payload.bias_lon is not None:
-                lat = payload.bias_lat / 1e7
-                lon = payload.bias_lon / 1e7
-                # Create a viewbox around the bias point (roughly 50km)
-                params["viewbox"] = f"{lon - 0.5},{lat + 0.5},{lon + 0.5},{lat - 0.5}"
-                params["bounded"] = 0  # Don't strictly limit to viewbox
+            # Add tight viewbox bias (~5km) if coordinates provided
+            if has_bias:
+                params["viewbox"] = (
+                    f"{bias_lon - 0.05},{bias_lat + 0.05},"
+                    f"{bias_lon + 0.05},{bias_lat - 0.05}"
+                )
+                params["bounded"] = 0  # prefer viewbox but allow outside
 
             response = self._http_client.get(
                 f"{nominatim_url}/search",
@@ -593,8 +644,20 @@ class MapsService(BaseService):
             response.raise_for_status()
             data = response.json()
 
+            # Build results with distance for sorting
+            candidates = []
+            for item in data:
+                lat = float(item.get("lat", 0))
+                lon = float(item.get("lon", 0))
+                dist_sq = self._geo_distance_sq(bias_lat, bias_lon, lat, lon) if has_bias else 0.0
+                candidates.append((dist_sq, item))
+
+            # Sort by proximity to user's position
+            if has_bias:
+                candidates.sort(key=lambda c: c[0])
+
             results = []
-            for item in data[:max_results]:
+            for _, item in candidates[:max_results]:
                 results.append(MapGeocodeResult(
                     display_name=self._truncate_display_name(
                         item.get("display_name", "")

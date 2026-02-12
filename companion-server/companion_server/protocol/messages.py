@@ -213,6 +213,7 @@ class MapRouteInstruction:
     distance_m: int  # Distance in meters to this maneuver
     maneuver: str  # "turn-left", "turn-right", "straight", "arrive", etc.
     street: str  # Street name (may be empty)
+    bearing: int = 0  # Compass bearing after maneuver (0-360, 0=north)
 
 
 @dataclass

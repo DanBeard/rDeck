@@ -121,6 +121,8 @@ protected:
     lv_obj_t* _search_btn = nullptr;
     lv_obj_t* _route_btn = nullptr;
 
+    lv_obj_t* _compass_label = nullptr;
+
     // Directions UI
     lv_obj_t* _directions_overlay = nullptr;
     lv_obj_t* _directions_list = nullptr;

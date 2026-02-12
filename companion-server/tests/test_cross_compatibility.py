@@ -190,8 +190,8 @@ class TestCanonicalTestVectors:
         expected_structure = {
             "points": [478563210, -1224567890, 478600000, -1224500000],
             "instructions": [
-                {"distance_m": 150, "maneuver": "straight", "street": "Main St"},
-                {"distance_m": 0, "maneuver": "arrive", "street": ""},
+                {"distance_m": 150, "maneuver": "straight", "street": "Main St", "bearing": 0},
+                {"distance_m": 0, "maneuver": "arrive", "street": "", "bearing": 0},
             ],
             "total_distance_m": 150,
             "total_time_s": 120,
