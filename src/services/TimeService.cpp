@@ -41,6 +41,12 @@ void TimeService::tick(const unsigned long tMillis) {
         Serial.println("[TimeService] NTP request timed out");
         _ntpRequestPending = false;
     }
+
+    // Propagation sync
+    if (tMillis - _lastPropSync > PROP_SYNC_INTERVAL || tMillis < _lastPropSync) {
+        requestPropSync();
+        _lastPropSync = tMillis;
+    }
 }
 
 bool TimeService::needsNtpSync() const {
@@ -78,6 +84,23 @@ void TimeService::requestNtpSync() {
     }
 
     // No NTP server found - that's OK, we'll try again later
+}
+
+void TimeService::requestPropSync() {
+    auto trustedServers = Retcon::Service::getTrustedServers().getTrustedServers();
+
+    for (const auto& server : trustedServers) {
+        for (const auto& svc : server.services) {
+            if (svc == "propagation") {
+                RnsService* rns = _retos->fetchService<RnsService>();
+                if (rns) {
+                    Serial.printf("[TimeService] Requesting propagation sync from '%s'\n", server.name.c_str());
+                    rns->requestPropSync(server.hash);
+                    return;
+                }
+            }
+        }
+    }
 }
 
 void TimeService::handleNtpResponse(uint32_t serverTimestamp, uint32_t clientTimestamp) {

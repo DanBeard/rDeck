@@ -330,6 +330,44 @@ void Settings::drawTrustedServersSection() {
         for (const auto& server : trusted) {
             drawTrustedServerRow(server, false);
         }
+
+        // Check if any trusted server offers propagation - show Sync Now button
+        bool hasPropagation = false;
+        for (const auto& server : trusted) {
+            for (const auto& svc : server.services) {
+                if (svc == "propagation") { hasPropagation = true; break; }
+            }
+            if (hasPropagation) break;
+        }
+
+        if (hasPropagation) {
+            lv_obj_t* syncBtn = lv_btn_create(settings_column);
+            lv_obj_set_size(syncBtn, LV_PCT(95), 35);
+            lv_obj_add_flag(syncBtn, LV_OBJ_FLAG_FLEX_IN_NEW_TRACK);
+            lv_obj_set_style_border_width(syncBtn, 2, LV_PART_MAIN);
+            lv_obj_set_style_border_color(syncBtn, retOsGlobalPtr->ui()->fg_color(), LV_PART_MAIN);
+            lv_obj_set_style_bg_color(syncBtn, retOsGlobalPtr->ui()->bg_color(), LV_PART_MAIN);
+            lv_obj_set_style_pad_all(syncBtn, 5, LV_PART_MAIN);
+            lv_obj_set_style_pad_top(syncBtn, 8, LV_PART_MAIN);
+
+            lv_obj_t* syncLabel = lv_label_create(syncBtn);
+            lv_label_set_text(syncLabel, LV_SYMBOL_DOWNLOAD " Sync Messages");
+            lv_obj_set_style_text_color(syncLabel, retOsGlobalPtr->ui()->fg_color(), LV_PART_MAIN);
+            lv_obj_center(syncLabel);
+
+            lv_obj_add_event_cb(syncBtn, [](lv_event_t* e) {
+                RnsService* rns = retOsGlobalPtr->fetchService<RnsService>();
+                if (rns) {
+                    rns->queueAction([]() {
+                        TimeService* timeSvc = retOsGlobalPtr->fetchService<TimeService>();
+                        if (timeSvc) {
+                            timeSvc->requestPropSync();
+                        }
+                    });
+                }
+            }, LV_EVENT_CLICKED, nullptr);
+            lv_group_add_obj(_retos->ui()->default_input_group(), syncBtn);
+        }
     }
 }
 

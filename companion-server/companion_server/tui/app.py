@@ -1,8 +1,11 @@
 """Main Textual TUI application."""
 
+import re
+import socket
 import threading
 import time
 from datetime import datetime
+from pathlib import Path
 
 from textual.app import App, ComposeResult
 from textual.containers import Container, Horizontal, Vertical, ScrollableContainer
@@ -15,7 +18,34 @@ from ..trust_manager import TrustManager, TrustStatus
 from ..config import Config
 from .announce_view import AnnounceView
 from .trust_view import TrustView
-from .service_views import NTPServiceView, SearchServiceView, MapsServiceView
+from .service_views import NTPServiceView, SearchServiceView, MapsServiceView, PropagationServiceView
+
+
+def _get_local_ip() -> str:
+    """Get the local network IP address (not 127.0.0.1)."""
+    try:
+        # Connect to a public IP (doesn't actually send data) to determine
+        # which local interface would be used for outbound traffic.
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("10.255.255.255", 1))
+            return s.getsockname()[0]
+    except OSError:
+        return "127.0.0.1"
+
+
+def _get_tcp_port(data_dir: Path) -> int | None:
+    """Read the TCP listen port from the Reticulum config, if present."""
+    config_path = data_dir / "reticulum" / "config"
+    if not config_path.exists():
+        return None
+    try:
+        text = config_path.read_text()
+        if "TCPServerInterface" not in text:
+            return None
+        m = re.search(r"listen_port\s*=\s*(\d+)", text)
+        return int(m.group(1)) if m else None
+    except OSError:
+        return None
 
 
 class TrustStateChanged(Message):
@@ -70,6 +100,8 @@ class LogPanel(Static):
 
 class CompanionServerApp(App):
     """Companion Server TUI application."""
+
+    TITLE = "Companion Server"
 
     CSS = """
     Screen {
@@ -138,6 +170,14 @@ class CompanionServerApp(App):
         self.rns_service = rns_service
         self.trust_manager = trust_manager
 
+        # Show local IP and TCP port in header for easy device configuration
+        local_ip = _get_local_ip()
+        tcp_port = _get_tcp_port(rns_service.config.data_dir)
+        if tcp_port is not None:
+            self.sub_title = f"{local_ip}:{tcp_port}"
+        else:
+            self.sub_title = local_ip
+
         # Register callbacks
         self.rns_service.on_announce(self._on_announce)
         self.rns_service.on_log(self._on_log)
@@ -168,6 +208,11 @@ class CompanionServerApp(App):
                         self.rns_service.config,
                         maps_service=self.rns_service._maps_service,
                         id="maps-view",
+                    )
+                with TabPane("Propagation", id="tab-propagation"):
+                    yield PropagationServiceView(
+                        self.rns_service.config,
+                        id="propagation-view",
                     )
 
         yield Footer()
@@ -227,6 +272,9 @@ class CompanionServerApp(App):
                 view.add_event(event)
             elif event.service == "maps":
                 view = self.query_one("#maps-view", MapsServiceView)
+                view.add_event(event)
+            elif event.service == "propagation":
+                view = self.query_one("#propagation-view", PropagationServiceView)
                 view.add_event(event)
         except Exception as e:
             self._add_log(f"Error routing service event: {e}")

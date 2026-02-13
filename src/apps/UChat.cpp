@@ -49,6 +49,8 @@ static const char* getStatusSymbol(Retcon::LXMF::Message::STATUS status) {
             return LV_SYMBOL_CLOSE;
         case Retcon::LXMF::Message::STATUS::UNKNOWN_DEST:
             return LV_SYMBOL_WARNING;
+        case Retcon::LXMF::Message::STATUS::PROPOGATION_NODE:
+            return LV_SYMBOL_UPLOAD;
         default:
             return "";
     }

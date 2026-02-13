@@ -24,6 +24,11 @@ from .messages import (
     MapGeocodeRequestPayload,
     MapGeocodeResponsePayload,
     MapGeocodeResult,
+    PropSyncRequestPayload,
+    PropSyncResponsePayload,
+    PropMsgDeliverPayload,
+    PropSubmitRequestPayload,
+    PropSubmitResponsePayload,
 )
 
 
@@ -173,6 +178,40 @@ def _encode_payload(msg_type: MessageType, payload: Any) -> bytes:
         if p.error:
             data["error"] = p.error
 
+    # Propagation service payloads
+    elif msg_type == MessageType.PROP_SYNC_REQUEST:
+        p: PropSyncRequestPayload = payload
+        data = {
+            "lxmf_dest_hash": p.lxmf_dest_hash,
+            "known_ids": p.known_ids,
+            "max_messages": p.max_messages,
+        }
+
+    elif msg_type == MessageType.PROP_SYNC_RESPONSE:
+        p: PropSyncResponsePayload = payload
+        data = {"count": p.count}
+        if p.error:
+            data["error"] = p.error
+
+    elif msg_type == MessageType.PROP_MSG_DELIVER:
+        p: PropMsgDeliverPayload = payload
+        data = {
+            "transient_id": p.transient_id,
+            "raw_lxmf": p.raw_lxmf,
+        }
+
+    elif msg_type == MessageType.PROP_SUBMIT_REQUEST:
+        p: PropSubmitRequestPayload = payload
+        data = {"raw_lxmf": p.raw_lxmf}
+
+    elif msg_type == MessageType.PROP_SUBMIT_RESPONSE:
+        p: PropSubmitResponsePayload = payload
+        data = {"accepted": p.accepted}
+        if p.transient_id:
+            data["transient_id"] = p.transient_id
+        if p.error:
+            data["error"] = p.error
+
     return msgpack.packb(data, use_bin_type=True)
 
 
@@ -294,6 +333,38 @@ def _decode_payload(msg_type: MessageType, payload_bytes: bytes) -> Any:
         return MapGeocodeResponsePayload(
             query=data.get("query", ""),
             results=results,
+            error=data.get("error"),
+        )
+
+    # Propagation service payloads
+    elif msg_type == MessageType.PROP_SYNC_REQUEST:
+        return PropSyncRequestPayload(
+            lxmf_dest_hash=data.get("lxmf_dest_hash", b""),
+            known_ids=data.get("known_ids", []),
+            max_messages=data.get("max_messages", 10),
+        )
+
+    elif msg_type == MessageType.PROP_SYNC_RESPONSE:
+        return PropSyncResponsePayload(
+            count=data.get("count", 0),
+            error=data.get("error"),
+        )
+
+    elif msg_type == MessageType.PROP_MSG_DELIVER:
+        return PropMsgDeliverPayload(
+            transient_id=data.get("transient_id", b""),
+            raw_lxmf=data.get("raw_lxmf", b""),
+        )
+
+    elif msg_type == MessageType.PROP_SUBMIT_REQUEST:
+        return PropSubmitRequestPayload(
+            raw_lxmf=data.get("raw_lxmf", b""),
+        )
+
+    elif msg_type == MessageType.PROP_SUBMIT_RESPONSE:
+        return PropSubmitResponsePayload(
+            accepted=data.get("accepted", False),
+            transient_id=data.get("transient_id", b""),
             error=data.get("error"),
         )
 

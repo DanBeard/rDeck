@@ -31,6 +31,10 @@ class Config:
     # NTP service settings
     ntp_refresh_interval: int = 3600  # seconds
 
+    # Propagation service settings
+    propagation_enabled: bool = False
+    propagation_max_messages_per_sync: int = 10
+
     # Maps service settings
     maps_enabled: bool = False
     maps_mbtiles_path: Optional[str] = None  # Path to MBTiles file
@@ -66,6 +70,8 @@ class Config:
         self.ai_summary_max_tokens = data.get("ai_summary_max_tokens", self.ai_summary_max_tokens)
         self.ai_summary_context_size = data.get("ai_summary_context_size", self.ai_summary_context_size)
         self.ntp_refresh_interval = data.get("ntp_refresh_interval", self.ntp_refresh_interval)
+        self.propagation_enabled = data.get("propagation_enabled", self.propagation_enabled)
+        self.propagation_max_messages_per_sync = data.get("propagation_max_messages_per_sync", self.propagation_max_messages_per_sync)
         self.maps_enabled = data.get("maps_enabled", self.maps_enabled)
         self.maps_mbtiles_path = data.get("maps_mbtiles_path", self.maps_mbtiles_path)
         self.maps_valhalla_url = data.get("maps_valhalla_url", self.maps_valhalla_url)
@@ -83,6 +89,8 @@ class Config:
             "ai_summary_max_tokens": self.ai_summary_max_tokens,
             "ai_summary_context_size": self.ai_summary_context_size,
             "ntp_refresh_interval": self.ntp_refresh_interval,
+            "propagation_enabled": self.propagation_enabled,
+            "propagation_max_messages_per_sync": self.propagation_max_messages_per_sync,
             "maps_enabled": self.maps_enabled,
             "maps_mbtiles_path": self.maps_mbtiles_path,
             "maps_valhalla_url": self.maps_valhalla_url,

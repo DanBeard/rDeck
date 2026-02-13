@@ -29,6 +29,13 @@ class MessageType(IntEnum):
     MAP_GEOCODE_REQUEST = 0x35
     MAP_GEOCODE_RESPONSE = 0x36
 
+    # Propagation service
+    PROP_SYNC_REQUEST = 0x40
+    PROP_SYNC_RESPONSE = 0x41
+    PROP_MSG_DELIVER = 0x42
+    PROP_SUBMIT_REQUEST = 0x43
+    PROP_SUBMIT_RESPONSE = 0x44
+
 
 @dataclass
 class ServiceMessage:
@@ -262,4 +269,63 @@ class MapGeocodeResponsePayload:
 
     query: str
     results: list[MapGeocodeResult] = field(default_factory=list)
+    error: Optional[str] = None
+
+
+# Propagation service payloads
+
+
+@dataclass
+class PropSyncRequestPayload:
+    """Payload for PROP_SYNC_REQUEST message.
+
+    Device -> Server: Poll for stored messages
+    """
+
+    lxmf_dest_hash: bytes  # rDeck's LXMF delivery destination hash (16 bytes)
+    known_ids: list[bytes] = field(default_factory=list)  # Transient IDs already received
+    max_messages: int = 10
+
+
+@dataclass
+class PropSyncResponsePayload:
+    """Payload for PROP_SYNC_RESPONSE message.
+
+    Server -> Device: Count of messages being delivered
+    """
+
+    count: int = 0
+    error: Optional[str] = None
+
+
+@dataclass
+class PropMsgDeliverPayload:
+    """Payload for PROP_MSG_DELIVER message.
+
+    Server -> Device: Deliver raw LXMF message bytes
+    """
+
+    transient_id: bytes  # SHA-256 hash of raw bytes (for dedup)
+    raw_lxmf: bytes  # Raw LXMF packed bytes (dest+src+sig+payload)
+
+
+@dataclass
+class PropSubmitRequestPayload:
+    """Payload for PROP_SUBMIT_REQUEST message.
+
+    Device -> Server: Submit raw LXMF bytes for propagation
+    """
+
+    raw_lxmf: bytes  # Raw LXMF packed bytes from fullMsg()
+
+
+@dataclass
+class PropSubmitResponsePayload:
+    """Payload for PROP_SUBMIT_RESPONSE message.
+
+    Server -> Device: Confirmation
+    """
+
+    accepted: bool = False
+    transient_id: bytes = b""  # Assigned transient ID for tracking
     error: Optional[str] = None

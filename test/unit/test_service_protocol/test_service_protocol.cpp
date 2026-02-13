@@ -578,6 +578,183 @@ void test_map_geocode_response_empty_results(void) {
 }
 
 // ============================================================================
+// Propagation Message Type Values
+// ============================================================================
+
+void test_message_type_prop_sync_request_value(void) {
+    TEST_ASSERT_EQUAL(0x40, static_cast<uint8_t>(MessageType::PROP_SYNC_REQUEST));
+}
+
+void test_message_type_prop_sync_response_value(void) {
+    TEST_ASSERT_EQUAL(0x41, static_cast<uint8_t>(MessageType::PROP_SYNC_RESPONSE));
+}
+
+void test_message_type_prop_msg_deliver_value(void) {
+    TEST_ASSERT_EQUAL(0x42, static_cast<uint8_t>(MessageType::PROP_MSG_DELIVER));
+}
+
+void test_message_type_prop_submit_request_value(void) {
+    TEST_ASSERT_EQUAL(0x43, static_cast<uint8_t>(MessageType::PROP_SUBMIT_REQUEST));
+}
+
+void test_message_type_prop_submit_response_value(void) {
+    TEST_ASSERT_EQUAL(0x44, static_cast<uint8_t>(MessageType::PROP_SUBMIT_RESPONSE));
+}
+
+// ============================================================================
+// PropSyncRequestPayload Tests
+// ============================================================================
+
+void test_prop_sync_request_serialize_deserialize(void) {
+    PropSyncRequestPayload original;
+    original.lxmf_dest_hash.assignHex("abcdef0123456789abcdef0123456789");
+    RNS::Bytes id1;
+    id1.assignHex("1111111111111111111111111111111111111111111111111111111111111111");
+    original.known_ids.push_back(id1);
+    original.max_messages = 5;
+
+    uint8_t buffer[512];
+    size_t len = original.serialize(buffer, sizeof(buffer));
+    TEST_ASSERT_TRUE(len > 0);
+
+    PropSyncRequestPayload decoded;
+    decoded.deserialize(buffer, len);
+
+    TEST_ASSERT_EQUAL(16, decoded.lxmf_dest_hash.size());
+    TEST_ASSERT_EQUAL_STRING("abcdef0123456789abcdef0123456789", decoded.lxmf_dest_hash.toHex().c_str());
+    TEST_ASSERT_EQUAL(1, decoded.known_ids.size());
+    TEST_ASSERT_EQUAL(5, decoded.max_messages);
+}
+
+void test_prop_sync_request_empty_known_ids(void) {
+    PropSyncRequestPayload original;
+    original.lxmf_dest_hash.assignHex("abcdef0123456789abcdef0123456789");
+    // No known_ids
+
+    uint8_t buffer[256];
+    size_t len = original.serialize(buffer, sizeof(buffer));
+
+    PropSyncRequestPayload decoded;
+    decoded.deserialize(buffer, len);
+
+    TEST_ASSERT_EQUAL(0, decoded.known_ids.size());
+    TEST_ASSERT_EQUAL(10, decoded.max_messages);  // default
+}
+
+// ============================================================================
+// PropSyncResponsePayload Tests
+// ============================================================================
+
+void test_prop_sync_response_serialize_deserialize(void) {
+    PropSyncResponsePayload original;
+    original.count = 3;
+
+    uint8_t buffer[128];
+    size_t len = original.serialize(buffer, sizeof(buffer));
+
+    PropSyncResponsePayload decoded;
+    decoded.deserialize(buffer, len);
+
+    TEST_ASSERT_EQUAL(3, decoded.count);
+    TEST_ASSERT_TRUE(decoded.error.empty());
+}
+
+void test_prop_sync_response_with_error(void) {
+    PropSyncResponsePayload original;
+    original.count = 0;
+    original.error = "Propagation not enabled";
+
+    uint8_t buffer[256];
+    size_t len = original.serialize(buffer, sizeof(buffer));
+
+    PropSyncResponsePayload decoded;
+    decoded.deserialize(buffer, len);
+
+    TEST_ASSERT_EQUAL(0, decoded.count);
+    TEST_ASSERT_EQUAL_STRING("Propagation not enabled", decoded.error.c_str());
+}
+
+// ============================================================================
+// PropMsgDeliverPayload Tests
+// ============================================================================
+
+void test_prop_msg_deliver_serialize_deserialize(void) {
+    PropMsgDeliverPayload original;
+    original.transient_id.assignHex("aabbccdd11223344aabbccdd11223344aabbccdd11223344aabbccdd11223344");
+    // Simulate raw LXMF: 16 bytes dest + 16 bytes src + 64 bytes sig + some payload
+    uint8_t fakeMsg[100];
+    for (int i = 0; i < 100; i++) fakeMsg[i] = (uint8_t)(i & 0xFF);
+    original.raw_lxmf.assign(fakeMsg, 100);
+
+    uint8_t buffer[512];
+    size_t len = original.serialize(buffer, sizeof(buffer));
+
+    PropMsgDeliverPayload decoded;
+    decoded.deserialize(buffer, len);
+
+    TEST_ASSERT_EQUAL(32, decoded.transient_id.size());
+    TEST_ASSERT_EQUAL(100, decoded.raw_lxmf.size());
+    TEST_ASSERT_EQUAL(0, decoded.raw_lxmf.data()[0]);
+    TEST_ASSERT_EQUAL(99, decoded.raw_lxmf.data()[99]);
+}
+
+// ============================================================================
+// PropSubmitRequestPayload Tests
+// ============================================================================
+
+void test_prop_submit_request_serialize_deserialize(void) {
+    PropSubmitRequestPayload original;
+    uint8_t fakeMsg[200];
+    for (int i = 0; i < 200; i++) fakeMsg[i] = (uint8_t)(i & 0xFF);
+    original.raw_lxmf.assign(fakeMsg, 200);
+
+    uint8_t buffer[512];
+    size_t len = original.serialize(buffer, sizeof(buffer));
+
+    PropSubmitRequestPayload decoded;
+    decoded.deserialize(buffer, len);
+
+    TEST_ASSERT_EQUAL(200, decoded.raw_lxmf.size());
+    TEST_ASSERT_EQUAL(0, decoded.raw_lxmf.data()[0]);
+    TEST_ASSERT_EQUAL(199, decoded.raw_lxmf.data()[199]);
+}
+
+// ============================================================================
+// PropSubmitResponsePayload Tests
+// ============================================================================
+
+void test_prop_submit_response_accepted(void) {
+    PropSubmitResponsePayload original;
+    original.accepted = true;
+    original.transient_id.assignHex("aabbccdd11223344aabbccdd11223344aabbccdd11223344aabbccdd11223344");
+
+    uint8_t buffer[256];
+    size_t len = original.serialize(buffer, sizeof(buffer));
+
+    PropSubmitResponsePayload decoded;
+    decoded.deserialize(buffer, len);
+
+    TEST_ASSERT_TRUE(decoded.accepted);
+    TEST_ASSERT_EQUAL(32, decoded.transient_id.size());
+    TEST_ASSERT_TRUE(decoded.error.empty());
+}
+
+void test_prop_submit_response_rejected(void) {
+    PropSubmitResponsePayload original;
+    original.accepted = false;
+    original.error = "Propagation store full";
+
+    uint8_t buffer[256];
+    size_t len = original.serialize(buffer, sizeof(buffer));
+
+    PropSubmitResponsePayload decoded;
+    decoded.deserialize(buffer, len);
+
+    TEST_ASSERT_FALSE(decoded.accepted);
+    TEST_ASSERT_EQUAL_STRING("Propagation store full", decoded.error.c_str());
+}
+
+// ============================================================================
 // ServiceMessage Tests
 // ============================================================================
 
@@ -1169,6 +1346,13 @@ int main(int argc, char **argv) {
     RUN_TEST(test_message_type_map_geocode_request_value);
     RUN_TEST(test_message_type_map_geocode_response_value);
 
+    // Propagation message type tests
+    RUN_TEST(test_message_type_prop_sync_request_value);
+    RUN_TEST(test_message_type_prop_sync_response_value);
+    RUN_TEST(test_message_type_prop_msg_deliver_value);
+    RUN_TEST(test_message_type_prop_submit_request_value);
+    RUN_TEST(test_message_type_prop_submit_response_value);
+
     // TrustOfferPayload tests
     RUN_TEST(test_trust_offer_serialize_deserialize);
     RUN_TEST(test_trust_offer_empty_services);
@@ -1219,6 +1403,24 @@ int main(int argc, char **argv) {
     RUN_TEST(test_map_geocode_response_serialize_deserialize);
     RUN_TEST(test_map_geocode_response_with_error);
     RUN_TEST(test_map_geocode_response_empty_results);
+
+    // PropSyncRequestPayload tests
+    RUN_TEST(test_prop_sync_request_serialize_deserialize);
+    RUN_TEST(test_prop_sync_request_empty_known_ids);
+
+    // PropSyncResponsePayload tests
+    RUN_TEST(test_prop_sync_response_serialize_deserialize);
+    RUN_TEST(test_prop_sync_response_with_error);
+
+    // PropMsgDeliverPayload tests
+    RUN_TEST(test_prop_msg_deliver_serialize_deserialize);
+
+    // PropSubmitRequestPayload tests
+    RUN_TEST(test_prop_submit_request_serialize_deserialize);
+
+    // PropSubmitResponsePayload tests
+    RUN_TEST(test_prop_submit_response_accepted);
+    RUN_TEST(test_prop_submit_response_rejected);
 
     // ServiceMessage tests
     RUN_TEST(test_service_message_is_service_message_true);

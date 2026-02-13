@@ -36,17 +36,28 @@ public:
      */
     bool needsNtpSync() const;
 
+    /**
+     * Request propagation sync from a trusted server.
+     * Polls for stored LXMF messages on the propagation node.
+     */
+    void requestPropSync();
+
 private:
     // Aggressive sync on boot until we get good time, then relax
     static constexpr unsigned long NTP_SYNC_INTERVAL_FAST = 1 * 60 * 1000;   // 1 minute (before time is set)
     static constexpr unsigned long NTP_SYNC_INTERVAL_SLOW = 10 * 60 * 1000;  // 10 minutes (after time is set)
     static constexpr unsigned long NTP_REQUEST_TIMEOUT = 30 * 1000;          // 30 seconds
 
+    // Propagation sync interval
+    static constexpr unsigned long PROP_SYNC_INTERVAL = 5 * 60 * 1000;  // 5 minutes
+
     unsigned long _lastNtpSync = 0;
     unsigned long _lastNtpRequest = 0;
     uint32_t _pendingNtpRequestId = 0;
     bool _ntpRequestPending = false;
     bool _timeSetSinceBoot = false;  // True once we've received good time from any source
+
+    unsigned long _lastPropSync = 0;
 
     unsigned long getSyncInterval() const;
 };

@@ -24,6 +24,11 @@ from companion_server.protocol.messages import (
     MapGeocodeRequestPayload,
     MapGeocodeResponsePayload,
     MapGeocodeResult,
+    PropSyncRequestPayload,
+    PropSyncResponsePayload,
+    PropMsgDeliverPayload,
+    PropSubmitRequestPayload,
+    PropSubmitResponsePayload,
 )
 from companion_server.protocol.serialization import (
     _encode_payload,
@@ -286,6 +291,11 @@ class TestMessageTypeCompatibility:
         "MAP_ROUTE_RESPONSE": 0x34,
         "MAP_GEOCODE_REQUEST": 0x35,
         "MAP_GEOCODE_RESPONSE": 0x36,
+        "PROP_SYNC_REQUEST": 0x40,
+        "PROP_SYNC_RESPONSE": 0x41,
+        "PROP_MSG_DELIVER": 0x42,
+        "PROP_SUBMIT_REQUEST": 0x43,
+        "PROP_SUBMIT_RESPONSE": 0x44,
     }
 
     def test_all_message_types_match_protocol(self):
@@ -303,6 +313,11 @@ class TestMessageTypeCompatibility:
         assert MessageType.MAP_ROUTE_RESPONSE == self.PROTOCOL_VALUES["MAP_ROUTE_RESPONSE"]
         assert MessageType.MAP_GEOCODE_REQUEST == self.PROTOCOL_VALUES["MAP_GEOCODE_REQUEST"]
         assert MessageType.MAP_GEOCODE_RESPONSE == self.PROTOCOL_VALUES["MAP_GEOCODE_RESPONSE"]
+        assert MessageType.PROP_SYNC_REQUEST == self.PROTOCOL_VALUES["PROP_SYNC_REQUEST"]
+        assert MessageType.PROP_SYNC_RESPONSE == self.PROTOCOL_VALUES["PROP_SYNC_RESPONSE"]
+        assert MessageType.PROP_MSG_DELIVER == self.PROTOCOL_VALUES["PROP_MSG_DELIVER"]
+        assert MessageType.PROP_SUBMIT_REQUEST == self.PROTOCOL_VALUES["PROP_SUBMIT_REQUEST"]
+        assert MessageType.PROP_SUBMIT_RESPONSE == self.PROTOCOL_VALUES["PROP_SUBMIT_RESPONSE"]
 
 
 class TestMsgpackFieldNames:
@@ -934,3 +949,149 @@ class TestLXMFMessageFormat:
         assert inner_data["instructions"][0]["street"] == "Main St"
         assert inner_data["total_distance_m"] == 350
         assert inner_data["total_time_s"] == 240
+
+
+class TestPropagationCanonicalVectors:
+    """Test vectors for propagation message cross-compatibility."""
+
+    def test_prop_sync_request_vector(self):
+        """PROP_SYNC_REQUEST with dest hash and known IDs."""
+        dest_hash = bytes.fromhex("abcdef0123456789abcdef0123456789")
+        known_id = bytes(32)
+
+        payload = PropSyncRequestPayload(
+            lxmf_dest_hash=dest_hash,
+            known_ids=[known_id],
+            max_messages=5,
+        )
+        encoded = _encode_payload(MessageType.PROP_SYNC_REQUEST, payload)
+
+        decoded_raw = msgpack.unpackb(encoded, raw=False)
+        assert decoded_raw["lxmf_dest_hash"] == dest_hash
+        assert len(decoded_raw["known_ids"]) == 1
+        assert decoded_raw["max_messages"] == 5
+
+        decoded = _decode_payload(MessageType.PROP_SYNC_REQUEST, encoded)
+        assert decoded.lxmf_dest_hash == dest_hash
+        assert decoded.max_messages == 5
+
+    def test_prop_sync_response_vector(self):
+        """PROP_SYNC_RESPONSE with count."""
+        payload = PropSyncResponsePayload(count=3)
+        encoded = _encode_payload(MessageType.PROP_SYNC_RESPONSE, payload)
+
+        decoded_raw = msgpack.unpackb(encoded, raw=False)
+        assert decoded_raw["count"] == 3
+
+    def test_prop_msg_deliver_vector(self):
+        """PROP_MSG_DELIVER with transient_id and raw LXMF bytes."""
+        tid = b"\xaa" * 32
+        raw = bytes(range(100))
+
+        payload = PropMsgDeliverPayload(transient_id=tid, raw_lxmf=raw)
+        encoded = _encode_payload(MessageType.PROP_MSG_DELIVER, payload)
+
+        decoded_raw = msgpack.unpackb(encoded, raw=False)
+        assert decoded_raw["transient_id"] == tid
+        assert decoded_raw["raw_lxmf"] == raw
+
+    def test_prop_submit_request_vector(self):
+        """PROP_SUBMIT_REQUEST with raw LXMF bytes."""
+        raw = bytes(range(200))
+
+        payload = PropSubmitRequestPayload(raw_lxmf=raw)
+        encoded = _encode_payload(MessageType.PROP_SUBMIT_REQUEST, payload)
+
+        decoded_raw = msgpack.unpackb(encoded, raw=False)
+        assert decoded_raw["raw_lxmf"] == raw
+
+    def test_prop_submit_response_vector(self):
+        """PROP_SUBMIT_RESPONSE with accepted and transient_id."""
+        tid = b"\xbb" * 32
+
+        payload = PropSubmitResponsePayload(accepted=True, transient_id=tid)
+        encoded = _encode_payload(MessageType.PROP_SUBMIT_RESPONSE, payload)
+
+        decoded_raw = msgpack.unpackb(encoded, raw=False)
+        assert decoded_raw["accepted"] is True
+        assert decoded_raw["transient_id"] == tid
+
+    def test_decode_cpp_prop_sync_request(self):
+        """Decode PROP_SYNC_REQUEST as C++ would encode it."""
+        dest_hash = bytes(16)
+        cpp_data = msgpack.packb({
+            "lxmf_dest_hash": dest_hash,
+            "known_ids": [bytes(32)],
+            "max_messages": 10,
+        }, use_bin_type=True)
+
+        decoded = _decode_payload(MessageType.PROP_SYNC_REQUEST, cpp_data)
+        assert decoded.lxmf_dest_hash == dest_hash
+        assert len(decoded.known_ids) == 1
+        assert decoded.max_messages == 10
+
+    def test_decode_cpp_prop_msg_deliver(self):
+        """Decode PROP_MSG_DELIVER as C++ would encode it."""
+        cpp_data = msgpack.packb({
+            "transient_id": b"\xcc" * 32,
+            "raw_lxmf": bytes(range(96)),
+        }, use_bin_type=True)
+
+        decoded = _decode_payload(MessageType.PROP_MSG_DELIVER, cpp_data)
+        assert decoded.transient_id == b"\xcc" * 32
+        assert decoded.raw_lxmf == bytes(range(96))
+
+    def test_decode_cpp_prop_submit_response(self):
+        """Decode PROP_SUBMIT_RESPONSE as C++ would encode it."""
+        cpp_data = msgpack.packb({
+            "accepted": True,
+            "transient_id": b"\xdd" * 32,
+        }, use_bin_type=True)
+
+        decoded = _decode_payload(MessageType.PROP_SUBMIT_RESPONSE, cpp_data)
+        assert decoded.accepted is True
+        assert decoded.transient_id == b"\xdd" * 32
+        assert decoded.error is None
+
+
+class TestPropagationFieldNames:
+    """Verify propagation msgpack field names match C++ expectations."""
+
+    def test_prop_sync_request_field_names(self):
+        payload = PropSyncRequestPayload(lxmf_dest_hash=bytes(16))
+        encoded = _encode_payload(MessageType.PROP_SYNC_REQUEST, payload)
+        data = msgpack.unpackb(encoded, raw=False)
+
+        assert "lxmf_dest_hash" in data
+        assert "known_ids" in data
+        assert "max_messages" in data
+
+    def test_prop_sync_response_field_names(self):
+        payload = PropSyncResponsePayload(count=0)
+        encoded = _encode_payload(MessageType.PROP_SYNC_RESPONSE, payload)
+        data = msgpack.unpackb(encoded, raw=False)
+
+        assert "count" in data
+
+    def test_prop_msg_deliver_field_names(self):
+        payload = PropMsgDeliverPayload(transient_id=bytes(32), raw_lxmf=bytes(10))
+        encoded = _encode_payload(MessageType.PROP_MSG_DELIVER, payload)
+        data = msgpack.unpackb(encoded, raw=False)
+
+        assert "transient_id" in data
+        assert "raw_lxmf" in data
+
+    def test_prop_submit_request_field_names(self):
+        payload = PropSubmitRequestPayload(raw_lxmf=bytes(10))
+        encoded = _encode_payload(MessageType.PROP_SUBMIT_REQUEST, payload)
+        data = msgpack.unpackb(encoded, raw=False)
+
+        assert "raw_lxmf" in data
+
+    def test_prop_submit_response_field_names(self):
+        payload = PropSubmitResponsePayload(accepted=True, transient_id=bytes(32))
+        encoded = _encode_payload(MessageType.PROP_SUBMIT_RESPONSE, payload)
+        data = msgpack.unpackb(encoded, raw=False)
+
+        assert "accepted" in data
+        assert "transient_id" in data

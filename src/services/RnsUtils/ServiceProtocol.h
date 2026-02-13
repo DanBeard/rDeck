@@ -41,6 +41,13 @@ enum class MessageType : uint8_t {
     MAP_ROUTE_RESPONSE = 0x34,
     MAP_GEOCODE_REQUEST = 0x35,
     MAP_GEOCODE_RESPONSE = 0x36,
+
+    // Propagation service
+    PROP_SYNC_REQUEST = 0x40,
+    PROP_SYNC_RESPONSE = 0x41,
+    PROP_MSG_DELIVER = 0x42,
+    PROP_SUBMIT_REQUEST = 0x43,
+    PROP_SUBMIT_RESPONSE = 0x44,
 };
 
 // Forward declarations
@@ -59,6 +66,11 @@ struct MapRouteInstruction;
 struct MapGeocodeRequestPayload;
 struct MapGeocodeResponsePayload;
 struct MapGeocodeResult;
+struct PropSyncRequestPayload;
+struct PropSyncResponsePayload;
+struct PropMsgDeliverPayload;
+struct PropSubmitRequestPayload;
+struct PropSubmitResponsePayload;
 
 /**
  * Trust offer payload - Server -> Device: "I want to serve you"
@@ -255,6 +267,66 @@ struct MapGeocodeResult {
 struct MapGeocodeResponsePayload {
     std::string query;
     std::vector<MapGeocodeResult> results;
+    std::string error;
+
+    void deserialize(const uint8_t* data, size_t len);
+    size_t serialize(uint8_t* buffer, size_t maxLen) const;
+};
+
+// ============================================================================
+// Propagation Service Payloads
+// ============================================================================
+
+/**
+ * Propagation sync request - Device -> Server: Poll for stored messages
+ */
+struct PropSyncRequestPayload {
+    RNS::Bytes lxmf_dest_hash;              // rDeck's LXMF delivery destination hash (16 bytes)
+    std::vector<RNS::Bytes> known_ids;       // Transient IDs already received (for dedup)
+    uint8_t max_messages = 10;
+
+    void deserialize(const uint8_t* data, size_t len);
+    size_t serialize(uint8_t* buffer, size_t maxLen) const;
+};
+
+/**
+ * Propagation sync response - Server -> Device: Count of messages being delivered
+ */
+struct PropSyncResponsePayload {
+    uint16_t count = 0;
+    std::string error;
+
+    void deserialize(const uint8_t* data, size_t len);
+    size_t serialize(uint8_t* buffer, size_t maxLen) const;
+};
+
+/**
+ * Propagation message deliver - Server -> Device: Deliver raw LXMF message bytes
+ */
+struct PropMsgDeliverPayload {
+    RNS::Bytes transient_id;     // SHA-256 hash of raw bytes (for dedup)
+    RNS::Bytes raw_lxmf;         // Raw LXMF packed bytes (dest+src+sig+payload)
+
+    void deserialize(const uint8_t* data, size_t len);
+    size_t serialize(uint8_t* buffer, size_t maxLen) const;
+};
+
+/**
+ * Propagation submit request - Device -> Server: Submit raw LXMF bytes for propagation
+ */
+struct PropSubmitRequestPayload {
+    RNS::Bytes raw_lxmf;         // Raw LXMF packed bytes from fullMsg()
+
+    void deserialize(const uint8_t* data, size_t len);
+    size_t serialize(uint8_t* buffer, size_t maxLen) const;
+};
+
+/**
+ * Propagation submit response - Server -> Device: Confirmation
+ */
+struct PropSubmitResponsePayload {
+    bool accepted = false;
+    RNS::Bytes transient_id;     // Assigned transient ID for tracking
     std::string error;
 
     void deserialize(const uint8_t* data, size_t len);

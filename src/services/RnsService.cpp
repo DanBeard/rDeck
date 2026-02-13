@@ -430,6 +430,34 @@ void RnsService::tick(const unsigned long tMillis) {
         _needs_send_processing = false;
         processNextInQueue();
     }
+
+    // Process deferred propagation submit
+    if (_needs_prop_submit) {
+        _needs_prop_submit = false;
+        if (_current_sending_msg && _current_sending_msg->status == Retcon::LXMF::Message::STATUS::PROPOGATION_NODE) {
+            RNS::Bytes fullMsg = _current_sending_msg->fullMsg();
+            if (fullMsg.size() >= 96) {
+                // Find a trusted server with propagation service
+                auto trustedServers = Retcon::Service::getTrustedServers().getTrustedServers();
+                bool submitted = false;
+                for (const auto& server : trustedServers) {
+                    for (const auto& svc : server.services) {
+                        if (svc == "propagation") {
+                            submitForPropagation(server.hash, fullMsg);
+                            submitted = true;
+                            break;
+                        }
+                    }
+                    if (submitted) break;
+                }
+                if (!submitted) {
+                    Serial.println("[LXMF] No propagation server available, message FAILED");
+                    _current_sending_msg->status = Retcon::LXMF::Message::STATUS::FAILED;
+                    sendMessageUpdateEvent(_current_sending_msg);
+                }
+            }
+        }
+    }
 }
 
 void RnsService::updateIcon(bool status){
@@ -512,8 +540,19 @@ void transmit_timeout_cb(const RNS::PacketReceipt &receipt) {
         delete rnsService->_sending_packet;
         rnsService->_sending_packet = nullptr;
         rnsService->_sending_message = false;
-        rnsService->_current_sending_msg->status = Retcon::LXMF::Message::STATUS::FAILED;
-        Serial.println("[LXMF] Message delivery FAILED after max retries");
+
+        // Try propagation fallback before marking as FAILED
+        // Check if fullMsg is available (message was packed)
+        RNS::Bytes fullMsg = rnsService->_current_sending_msg->fullMsg();
+        if (fullMsg.size() >= 96) {
+            // Defer propagation submit to tick() (can't call sendServiceMessage from receipt callback)
+            rnsService->_needs_prop_submit = true;
+            rnsService->_current_sending_msg->status = Retcon::LXMF::Message::STATUS::PROPOGATION_NODE;
+            Serial.println("[LXMF] Direct delivery failed, deferring to propagation node");
+        } else {
+            rnsService->_current_sending_msg->status = Retcon::LXMF::Message::STATUS::FAILED;
+            Serial.println("[LXMF] Message delivery FAILED after max retries");
+        }
         rnsService->sendMessageUpdateEvent(rnsService->_current_sending_msg);
     }
     // else: retry current message
@@ -887,6 +926,50 @@ void RnsService::requestGeocode(const RNS::Bytes& serverHash, const std::string&
     Serial.printf("[Service] Sent MAP_GEOCODE_REQUEST for '%s'\n", query.c_str());
 }
 
+// ============================================================================
+// Propagation Service Methods
+// ============================================================================
+
+void RnsService::requestPropSync(const RNS::Bytes& serverHash) {
+    Retcon::Service::PropSyncRequestPayload payload;
+    payload.lxmf_dest_hash = lxmf_delivery_src.hash();
+    payload.known_ids = _prop_received_ids;
+    payload.max_messages = 10;
+
+    uint8_t payloadBuf[4096];
+    size_t payloadLen = payload.serialize(payloadBuf, sizeof(payloadBuf));
+
+    uint32_t requestId = (uint32_t)(millis() & 0xFFFFFFFF);
+
+    Retcon::Service::ServiceMessage msg;
+    msg.msg_type = Retcon::Service::MessageType::PROP_SYNC_REQUEST;
+    msg.service = "propagation";
+    msg.payload.assign(payloadBuf, payloadLen);
+    msg.request_id = requestId;
+
+    sendServiceMessage(serverHash, msg);
+    Serial.printf("[Service] Sent PROP_SYNC_REQUEST (%zu known_ids)\n", _prop_received_ids.size());
+}
+
+void RnsService::submitForPropagation(const RNS::Bytes& serverHash, const RNS::Bytes& rawLxmf) {
+    Retcon::Service::PropSubmitRequestPayload payload;
+    payload.raw_lxmf = rawLxmf;
+
+    uint8_t payloadBuf[4096];
+    size_t payloadLen = payload.serialize(payloadBuf, sizeof(payloadBuf));
+
+    uint32_t requestId = (uint32_t)(millis() & 0xFFFFFFFF);
+
+    Retcon::Service::ServiceMessage msg;
+    msg.msg_type = Retcon::Service::MessageType::PROP_SUBMIT_REQUEST;
+    msg.service = "propagation";
+    msg.payload.assign(payloadBuf, payloadLen);
+    msg.request_id = requestId;
+
+    sendServiceMessage(serverHash, msg);
+    Serial.printf("[Service] Sent PROP_SUBMIT_REQUEST (%zu bytes)\n", rawLxmf.size());
+}
+
 void RnsService::handleServiceMessage(const Retcon::Service::ServiceMessage& msg, const RNS::Bytes& sourceHash) {
     Serial.printf("[Service] Handling message type 0x%02X from %s\n",
                   static_cast<uint8_t>(msg.msg_type), sourceHash.toHex().substr(0, 12).c_str());
@@ -965,6 +1048,43 @@ void RnsService::handleServiceMessage(const Retcon::Service::ServiceMessage& msg
             Retcon::Service::MapGeocodeResponsePayload payload;
             payload.deserialize(msg.payload.data(), msg.payload.size());
             handleGeocodeResponse(payload, msg.request_id);
+            break;
+        }
+
+        case Retcon::Service::MessageType::PROP_SYNC_RESPONSE: {
+            if (!Retcon::Service::getTrustedServers().isTrusted(sourceHash)) {
+                Serial.println("[Service] Ignoring prop sync response from untrusted server");
+                return;
+            }
+            Retcon::Service::PropSyncResponsePayload payload;
+            payload.deserialize(msg.payload.data(), msg.payload.size());
+            handlePropSyncResponse(payload);
+            break;
+        }
+
+        case Retcon::Service::MessageType::PROP_MSG_DELIVER: {
+            if (!Retcon::Service::getTrustedServers().isTrusted(sourceHash)) {
+                Serial.println("[Service] Ignoring prop message from untrusted server");
+                return;
+            }
+            Retcon::Service::PropMsgDeliverPayload payload;
+            payload.deserialize(msg.payload.data(), msg.payload.size());
+            handlePropMsgDeliver(payload);
+            break;
+        }
+
+        case Retcon::Service::MessageType::PROP_SUBMIT_RESPONSE: {
+            if (!Retcon::Service::getTrustedServers().isTrusted(sourceHash)) {
+                Serial.println("[Service] Ignoring prop submit response from untrusted server");
+                return;
+            }
+            Retcon::Service::PropSubmitResponsePayload payload;
+            payload.deserialize(msg.payload.data(), msg.payload.size());
+            if (payload.accepted) {
+                Serial.println("[Service] Message accepted by propagation node");
+            } else {
+                Serial.printf("[Service] Propagation submit rejected: %s\n", payload.error.c_str());
+            }
             break;
         }
 
@@ -1083,5 +1203,58 @@ void RnsService::handleGeocodeResponse(const Retcon::Service::MapGeocodeResponse
     e.type = EventType::MAP_GEOCODE_RESULTS;
     auto results = std::make_shared<Retcon::Service::MapGeocodeResponsePayload>(payload);
     e.data = results;
+    _retos->publishEvent(e);
+}
+
+// ============================================================================
+// Propagation Response Handlers
+// ============================================================================
+
+void RnsService::handlePropSyncResponse(const Retcon::Service::PropSyncResponsePayload& payload) {
+    if (!payload.error.empty()) {
+        Serial.printf("[Service] Propagation sync error: %s\n", payload.error.c_str());
+        return;
+    }
+    Serial.printf("[Service] Propagation sync: %u messages incoming\n", payload.count);
+}
+
+void RnsService::handlePropMsgDeliver(const Retcon::Service::PropMsgDeliverPayload& payload) {
+    Serial.printf("[Service] Received PROP_MSG_DELIVER (%zu bytes)\n", payload.raw_lxmf.size());
+
+    // Dedup check - skip if we already received this transient_id
+    for (const auto& id : _prop_received_ids) {
+        if (id == payload.transient_id) {
+            Serial.println("[Service] Duplicate propagation message, skipping");
+            return;
+        }
+    }
+
+    // Add to dedup window
+    _prop_received_ids.push_back(payload.transient_id);
+    if (_prop_received_ids.size() > MAX_PROP_RECEIVED_IDS) {
+        _prop_received_ids.erase(_prop_received_ids.begin());
+    }
+
+    // Parse raw LXMF bytes into a Message
+    if (payload.raw_lxmf.size() < 96) {
+        Serial.println("[Service] Propagation message too short, ignoring");
+        return;
+    }
+
+    auto lxmf_msg = std::make_shared<Retcon::LXMF::Message>(payload.raw_lxmf);
+    lxmf_msg->unpack();
+
+    Serial.printf("[Service] Propagation message from %s: '%s'\n",
+                  lxmf_msg->src.toHex().substr(0, 12).c_str(),
+                  lxmf_msg->title.c_str());
+
+    // Add to conversation
+    Retcon::LXMF::addMessageToConversation(*lxmf_msg, lxmf_msg->src);
+
+    // Publish NEW_MESSAGE event
+    Event e;
+    e.src = this;
+    e.type = NEW_MESSAGE;
+    e.data = lxmf_msg;
     _retos->publishEvent(e);
 }

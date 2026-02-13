@@ -371,6 +371,149 @@ size_t MapGeocodeResponsePayload::serialize(uint8_t* buffer, size_t maxLen) cons
 }
 
 // ============================================================================
+// PropSyncRequestPayload
+// ============================================================================
+
+void PropSyncRequestPayload::deserialize(const uint8_t* data, size_t len) {
+    JsonDocument doc;
+    deserializeMsgPack(doc, data, len);
+
+    if (doc["lxmf_dest_hash"].is<MsgPackBinary>()) {
+        MsgPackBinary bin = doc["lxmf_dest_hash"].as<MsgPackBinary>();
+        lxmf_dest_hash.assign((const uint8_t*)bin.data(), bin.size());
+    }
+
+    max_messages = doc["max_messages"] | 10;
+
+    known_ids.clear();
+    if (doc["known_ids"].is<JsonArray>()) {
+        JsonArray arr = doc["known_ids"];
+        for (size_t i = 0; i < arr.size(); i++) {
+            if (arr[i].is<MsgPackBinary>()) {
+                MsgPackBinary bin = arr[i].as<MsgPackBinary>();
+                RNS::Bytes id;
+                id.assign((const uint8_t*)bin.data(), bin.size());
+                known_ids.push_back(id);
+            }
+        }
+    }
+}
+
+size_t PropSyncRequestPayload::serialize(uint8_t* buffer, size_t maxLen) const {
+    JsonDocument doc;
+    if (lxmf_dest_hash.size() > 0) {
+        doc["lxmf_dest_hash"] = MsgPackBinary(lxmf_dest_hash.data(), lxmf_dest_hash.size());
+    }
+    doc["max_messages"] = max_messages;
+
+    JsonArray arr = doc["known_ids"].to<JsonArray>();
+    for (const auto& id : known_ids) {
+        arr.add(MsgPackBinary(id.data(), id.size()));
+    }
+
+    return serializeMsgPack(doc, buffer, maxLen);
+}
+
+// ============================================================================
+// PropSyncResponsePayload
+// ============================================================================
+
+void PropSyncResponsePayload::deserialize(const uint8_t* data, size_t len) {
+    JsonDocument doc;
+    deserializeMsgPack(doc, data, len);
+    count = doc["count"] | 0;
+    error = safeGetString(doc["error"]);
+}
+
+size_t PropSyncResponsePayload::serialize(uint8_t* buffer, size_t maxLen) const {
+    JsonDocument doc;
+    doc["count"] = count;
+    if (!error.empty()) {
+        doc["error"] = error;
+    }
+    return serializeMsgPack(doc, buffer, maxLen);
+}
+
+// ============================================================================
+// PropMsgDeliverPayload
+// ============================================================================
+
+void PropMsgDeliverPayload::deserialize(const uint8_t* data, size_t len) {
+    JsonDocument doc;
+    deserializeMsgPack(doc, data, len);
+
+    if (doc["transient_id"].is<MsgPackBinary>()) {
+        MsgPackBinary bin = doc["transient_id"].as<MsgPackBinary>();
+        transient_id.assign((const uint8_t*)bin.data(), bin.size());
+    }
+    if (doc["raw_lxmf"].is<MsgPackBinary>()) {
+        MsgPackBinary bin = doc["raw_lxmf"].as<MsgPackBinary>();
+        raw_lxmf.assign((const uint8_t*)bin.data(), bin.size());
+    }
+}
+
+size_t PropMsgDeliverPayload::serialize(uint8_t* buffer, size_t maxLen) const {
+    JsonDocument doc;
+    if (transient_id.size() > 0) {
+        doc["transient_id"] = MsgPackBinary(transient_id.data(), transient_id.size());
+    }
+    if (raw_lxmf.size() > 0) {
+        doc["raw_lxmf"] = MsgPackBinary(raw_lxmf.data(), raw_lxmf.size());
+    }
+    return serializeMsgPack(doc, buffer, maxLen);
+}
+
+// ============================================================================
+// PropSubmitRequestPayload
+// ============================================================================
+
+void PropSubmitRequestPayload::deserialize(const uint8_t* data, size_t len) {
+    JsonDocument doc;
+    deserializeMsgPack(doc, data, len);
+
+    if (doc["raw_lxmf"].is<MsgPackBinary>()) {
+        MsgPackBinary bin = doc["raw_lxmf"].as<MsgPackBinary>();
+        raw_lxmf.assign((const uint8_t*)bin.data(), bin.size());
+    }
+}
+
+size_t PropSubmitRequestPayload::serialize(uint8_t* buffer, size_t maxLen) const {
+    JsonDocument doc;
+    if (raw_lxmf.size() > 0) {
+        doc["raw_lxmf"] = MsgPackBinary(raw_lxmf.data(), raw_lxmf.size());
+    }
+    return serializeMsgPack(doc, buffer, maxLen);
+}
+
+// ============================================================================
+// PropSubmitResponsePayload
+// ============================================================================
+
+void PropSubmitResponsePayload::deserialize(const uint8_t* data, size_t len) {
+    JsonDocument doc;
+    deserializeMsgPack(doc, data, len);
+    accepted = doc["accepted"] | false;
+    error = safeGetString(doc["error"]);
+
+    if (doc["transient_id"].is<MsgPackBinary>()) {
+        MsgPackBinary bin = doc["transient_id"].as<MsgPackBinary>();
+        transient_id.assign((const uint8_t*)bin.data(), bin.size());
+    }
+}
+
+size_t PropSubmitResponsePayload::serialize(uint8_t* buffer, size_t maxLen) const {
+    JsonDocument doc;
+    doc["accepted"] = accepted;
+    if (!error.empty()) {
+        doc["error"] = error;
+    }
+    if (transient_id.size() > 0) {
+        doc["transient_id"] = MsgPackBinary(transient_id.data(), transient_id.size());
+    }
+    return serializeMsgPack(doc, buffer, maxLen);
+}
+
+// ============================================================================
 // ServiceMessage
 // ============================================================================
 

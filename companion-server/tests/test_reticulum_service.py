@@ -52,6 +52,7 @@ def config(temp_dir):
     cfg = Config(data_dir=temp_dir)
     cfg.server_name = "TestServer"
     cfg.enabled_services = ["ntp", "search"]
+    cfg.propagation_enabled = True
     return cfg
 
 
@@ -768,6 +769,185 @@ class TestEdgeCases:
         # Should still send and track
         assert len(harness.sent_messages) == 1
         assert len(trust_manager.get_pending_devices()) == 1
+
+
+class TestPropagationService:
+    """Tests for propagation service request/response handling."""
+
+    def test_prop_sync_requires_trust(self, harness, service, trust_manager):
+        """Propagation sync from untrusted device should be rejected."""
+        from companion_server.protocol import (
+            MessageType,
+            PropSyncRequestPayload,
+            encode_service_fields,
+            ServiceMessage,
+        )
+
+        device_hash = b"\x01" * 16
+
+        sync_request = ServiceMessage(
+            msg_type=MessageType.PROP_SYNC_REQUEST,
+            service="propagation",
+            payload=PropSyncRequestPayload(
+                lxmf_dest_hash=device_hash,
+                known_ids=[],
+                max_messages=10,
+            ),
+            request_id=100,
+        )
+        harness.simulate_message(device_hash, encode_service_fields(sync_request))
+
+        # Should not send response
+        assert len(harness.sent_messages) == 0
+
+    def test_prop_submit_requires_trust(self, harness, service, trust_manager):
+        """Propagation submit from untrusted device should be rejected."""
+        from companion_server.protocol import (
+            MessageType,
+            PropSubmitRequestPayload,
+            encode_service_fields,
+            ServiceMessage,
+        )
+
+        device_hash = b"\x01" * 16
+
+        submit_request = ServiceMessage(
+            msg_type=MessageType.PROP_SUBMIT_REQUEST,
+            service="propagation",
+            payload=PropSubmitRequestPayload(raw_lxmf=b"\x00" * 100),
+            request_id=200,
+        )
+        harness.simulate_message(device_hash, encode_service_fields(submit_request))
+
+        # Should not send response
+        assert len(harness.sent_messages) == 0
+
+    def test_prop_sync_upgrades_pending_to_mutual(self, harness, service, trust_manager):
+        """Propagation sync from pending device should upgrade trust."""
+        from companion_server.protocol import (
+            MessageType,
+            PropSyncRequestPayload,
+            encode_service_fields,
+            ServiceMessage,
+        )
+
+        device_hash = b"\x01" * 16
+
+        # Offer trust
+        harness.simulate_announce(device_hash, "Device")
+        service.send_trust_offer(device_hash.hex())
+        harness.clear_sent()
+
+        assert trust_manager.is_trust_pending(device_hash.hex())
+
+        # Device sends propagation sync without explicit TRUST_ACCEPT
+        sync_request = ServiceMessage(
+            msg_type=MessageType.PROP_SYNC_REQUEST,
+            service="propagation",
+            payload=PropSyncRequestPayload(
+                lxmf_dest_hash=device_hash,
+                known_ids=[],
+                max_messages=10,
+            ),
+            request_id=100,
+        )
+        harness.simulate_message(device_hash, encode_service_fields(sync_request))
+
+        # Should have upgraded trust
+        assert trust_manager.is_mutually_trusted(device_hash.hex())
+
+        # Should have sent at least a sync response
+        assert len(harness.sent_messages) >= 1
+
+    def test_prop_sync_from_trusted_device(self, harness, service, trust_manager):
+        """Propagation sync from trusted device should get response."""
+        from companion_server.protocol import (
+            MessageType,
+            PropSyncRequestPayload,
+            TrustAcceptPayload,
+            encode_service_fields,
+            decode_service_fields,
+            ServiceMessage,
+        )
+
+        device_hash = b"\x01" * 16
+
+        # Establish trust
+        harness.simulate_announce(device_hash, "Device")
+        service.send_trust_offer(device_hash.hex())
+        accept = ServiceMessage(
+            msg_type=MessageType.TRUST_ACCEPT,
+            service="trust",
+            payload=TrustAcceptPayload(device_name="Device"),
+            request_id=1,
+        )
+        harness.simulate_message(device_hash, encode_service_fields(accept))
+        harness.clear_sent()
+
+        # Send sync request
+        sync_request = ServiceMessage(
+            msg_type=MessageType.PROP_SYNC_REQUEST,
+            service="propagation",
+            payload=PropSyncRequestPayload(
+                lxmf_dest_hash=device_hash,
+                known_ids=[],
+                max_messages=10,
+            ),
+            request_id=100,
+        )
+        harness.simulate_message(device_hash, encode_service_fields(sync_request))
+
+        # Should send response
+        messages = harness.sent_messages
+        assert len(messages) >= 1
+        assert messages[0].destination_hash == device_hash
+
+        # First message should be PROP_SYNC_RESPONSE
+        response = decode_service_fields(messages[0].fields)
+        assert response.msg_type == MessageType.PROP_SYNC_RESPONSE
+
+    def test_prop_submit_from_trusted_device(self, harness, service, trust_manager):
+        """Propagation submit from trusted device should get response."""
+        from companion_server.protocol import (
+            MessageType,
+            PropSubmitRequestPayload,
+            TrustAcceptPayload,
+            encode_service_fields,
+            decode_service_fields,
+            ServiceMessage,
+        )
+
+        device_hash = b"\x01" * 16
+
+        # Establish trust
+        harness.simulate_announce(device_hash, "Device")
+        service.send_trust_offer(device_hash.hex())
+        accept = ServiceMessage(
+            msg_type=MessageType.TRUST_ACCEPT,
+            service="trust",
+            payload=TrustAcceptPayload(device_name="Device"),
+            request_id=1,
+        )
+        harness.simulate_message(device_hash, encode_service_fields(accept))
+        harness.clear_sent()
+
+        # Send submit request
+        submit_request = ServiceMessage(
+            msg_type=MessageType.PROP_SUBMIT_REQUEST,
+            service="propagation",
+            payload=PropSubmitRequestPayload(raw_lxmf=b"\x00" * 100),
+            request_id=200,
+        )
+        harness.simulate_message(device_hash, encode_service_fields(submit_request))
+
+        # Should send response
+        messages = harness.sent_messages
+        assert len(messages) == 1
+        assert messages[0].destination_hash == device_hash
+
+        # Should be PROP_SUBMIT_RESPONSE
+        response = decode_service_fields(messages[0].fields)
+        assert response.msg_type == MessageType.PROP_SUBMIT_RESPONSE
 
 
 class TestFullWorkflow:

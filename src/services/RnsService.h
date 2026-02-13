@@ -80,6 +80,10 @@ public:
                         int32_t biasLat = 0, int32_t biasLon = 0, bool hasBias = false,
                         uint8_t maxResults = 5);
 
+    // Propagation service methods
+    void requestPropSync(const RNS::Bytes& serverHash);
+    void submitForPropagation(const RNS::Bytes& serverHash, const RNS::Bytes& rawLxmf);
+
     static constexpr const char* settingsSection = "reticulum";
     static bool drawSettings(lv_obj_t * column, Settings* settings);
     static void applySettings();
@@ -146,6 +150,10 @@ protected:
     // Transport::outbound() while _jobs_running is still true.
     volatile bool _needs_send_processing = false;
 
+    // Deferred propagation submit — set from transmit_timeout_cb when direct
+    // delivery fails, processed in tick() to submit via propagation node.
+    volatile bool _needs_prop_submit = false;
+
     void sendMessageUpdateEvent(shared_ptr<Retcon::LXMF::Message> &msg);
 
     void handleTrustOffer(const Retcon::Service::TrustOfferPayload& payload, const RNS::Bytes& sourceHash);
@@ -154,6 +162,8 @@ protected:
     void handleMapTileResponse(const Retcon::Service::MapTileResponsePayload& payload, uint32_t requestId);
     void handleRouteResponse(const Retcon::Service::MapRouteResponsePayload& payload, uint32_t requestId);
     void handleGeocodeResponse(const Retcon::Service::MapGeocodeResponsePayload& payload, uint32_t requestId);
+    void handlePropSyncResponse(const Retcon::Service::PropSyncResponsePayload& payload);
+    void handlePropMsgDeliver(const Retcon::Service::PropMsgDeliverPayload& payload);
 
     // NTP sync state
     unsigned long _last_ntp_request = 0;
@@ -177,6 +187,10 @@ protected:
         uint32_t request_id;
     };
     std::map<uint32_t, PendingGeocode> _pending_geocodes;
+
+    // Propagation dedup - rolling window of received message transient IDs
+    static const size_t MAX_PROP_RECEIVED_IDS = 100;
+    std::vector<RNS::Bytes> _prop_received_ids;
 
     friend void transmit_delivery_cb(const RNS::PacketReceipt &receipt);
     friend void transmit_timeout_cb(const RNS::PacketReceipt &receipt);

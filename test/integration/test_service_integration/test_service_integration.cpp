@@ -25,6 +25,12 @@
 
 using namespace Retcon::Service;
 
+// Helper: create an RNS::Bytes filled with a given byte value
+static RNS::Bytes makeBytes(size_t len, uint8_t fill) {
+    std::vector<uint8_t> buf(len, fill);
+    return RNS::Bytes(buf.data(), len);
+}
+
 // ============================================================================
 // Test Fixtures
 // ============================================================================
@@ -655,6 +661,322 @@ void test_geocode_response_handling(void) {
 }
 
 // ============================================================================
+// Propagation Workflow Integration Tests
+// ============================================================================
+
+void test_prop_sync_request_message_generation(void) {
+    // Test generating a PROP_SYNC_REQUEST message (as rDeck would send)
+    PropSyncRequestPayload payload;
+    payload.lxmf_dest_hash.assignHex("aabbccddaabbccddaabbccddaabbccdd");
+    payload.known_ids.push_back(makeBytes(32, 0x11));
+    payload.known_ids.push_back(makeBytes(32, 0x22));
+    payload.max_messages = 10;
+
+    uint8_t payloadBuf[4096];
+    size_t payloadLen = payload.serialize(payloadBuf, sizeof(payloadBuf));
+
+    ServiceMessage msg;
+    msg.msg_type = MessageType::PROP_SYNC_REQUEST;
+    msg.service = "propagation";
+    msg.request_id = 700;
+    msg.payload.assign(payloadBuf, payloadLen);
+
+    // Convert to fields for LXMF
+    JsonDocument fields;
+    msg.toFields(fields);
+
+    TEST_ASSERT_EQUAL(0x40, fields["msg_type"].as<uint8_t>());
+    TEST_ASSERT_EQUAL_STRING("propagation", fields["service"].as<const char*>());
+    TEST_ASSERT_EQUAL(700, fields["request_id"].as<uint32_t>());
+
+    // Verify payload can be decoded back
+    MsgPackBinary bin = fields["payload"].as<MsgPackBinary>();
+    PropSyncRequestPayload decoded;
+    decoded.deserialize((const uint8_t*)bin.data(), bin.size());
+    TEST_ASSERT_EQUAL(16, decoded.lxmf_dest_hash.size());
+    TEST_ASSERT_EQUAL(2, decoded.known_ids.size());
+    TEST_ASSERT_EQUAL(10, decoded.max_messages);
+}
+
+void test_prop_sync_response_handling(void) {
+    // Simulate receiving PROP_SYNC_RESPONSE from server
+    PropSyncResponsePayload innerPayload;
+    innerPayload.count = 3;
+
+    uint8_t innerBuf[64];
+    size_t innerLen = innerPayload.serialize(innerBuf, sizeof(innerBuf));
+
+    ServiceMessage incomingMsg;
+    incomingMsg.msg_type = MessageType::PROP_SYNC_RESPONSE;
+    incomingMsg.service = "propagation";
+    incomingMsg.request_id = 700;
+    incomingMsg.payload.assign(innerBuf, innerLen);
+
+    // Create LXMF payload
+    auto lxmfPayload = createLxmfPayload(incomingMsg);
+
+    // Extract and parse
+    JsonDocument fields;
+    TEST_ASSERT_TRUE(extractServiceFields(lxmfPayload, fields));
+
+    ServiceMessage svcMsg = ServiceMessage::fromFields(fields);
+    TEST_ASSERT_EQUAL(MessageType::PROP_SYNC_RESPONSE, svcMsg.msg_type);
+    TEST_ASSERT_EQUAL_STRING("propagation", svcMsg.service.c_str());
+
+    // Deserialize payload
+    PropSyncResponsePayload decoded;
+    decoded.deserialize(svcMsg.payload.data(), svcMsg.payload.size());
+    TEST_ASSERT_EQUAL(3, decoded.count);
+    TEST_ASSERT_TRUE(decoded.error.empty());
+}
+
+void test_prop_sync_response_with_error(void) {
+    PropSyncResponsePayload innerPayload;
+    innerPayload.count = 0;
+    innerPayload.error = "Propagation not available";
+
+    uint8_t innerBuf[256];
+    size_t innerLen = innerPayload.serialize(innerBuf, sizeof(innerBuf));
+
+    ServiceMessage incomingMsg;
+    incomingMsg.msg_type = MessageType::PROP_SYNC_RESPONSE;
+    incomingMsg.service = "propagation";
+    incomingMsg.request_id = 701;
+    incomingMsg.payload.assign(innerBuf, innerLen);
+
+    auto lxmfPayload = createLxmfPayload(incomingMsg);
+
+    JsonDocument fields;
+    TEST_ASSERT_TRUE(extractServiceFields(lxmfPayload, fields));
+
+    ServiceMessage svcMsg = ServiceMessage::fromFields(fields);
+
+    PropSyncResponsePayload decoded;
+    decoded.deserialize(svcMsg.payload.data(), svcMsg.payload.size());
+    TEST_ASSERT_EQUAL(0, decoded.count);
+    TEST_ASSERT_EQUAL_STRING("Propagation not available", decoded.error.c_str());
+}
+
+void test_prop_msg_deliver_handling(void) {
+    // Simulate receiving a delivered LXMF message from propagation node
+    PropMsgDeliverPayload innerPayload;
+    innerPayload.transient_id = makeBytes(32, 0xAA);
+
+    // Create realistic raw LXMF bytes: dest(16) + src(16) + sig(64) + payload
+    RNS::Bytes rawLxmf;
+    rawLxmf.append(makeBytes(16, 0x01));  // dest_hash
+    rawLxmf.append(makeBytes(16, 0x02));  // src_hash
+    rawLxmf.append(makeBytes(64, 0x03));  // signature
+    // Minimal msgpack payload: [timestamp, title, content, fields]
+    JsonDocument payloadDoc;
+    JsonArray arr = payloadDoc.to<JsonArray>();
+    arr.add(1706825600);
+    arr.add("Hello");
+    arr.add("Test message");
+    arr.add(JsonObject());
+    uint8_t mpBuf[256];
+    size_t mpLen = serializeMsgPack(payloadDoc, mpBuf, sizeof(mpBuf));
+    rawLxmf.append(mpBuf, mpLen);
+    innerPayload.raw_lxmf = rawLxmf;
+
+    uint8_t innerBuf[4096];
+    size_t innerLen = innerPayload.serialize(innerBuf, sizeof(innerBuf));
+
+    ServiceMessage incomingMsg;
+    incomingMsg.msg_type = MessageType::PROP_MSG_DELIVER;
+    incomingMsg.service = "propagation";
+    incomingMsg.request_id = 0;
+    incomingMsg.payload.assign(innerBuf, innerLen);
+
+    // Create LXMF payload
+    auto lxmfPayload = createLxmfPayload(incomingMsg);
+
+    // Extract and parse
+    JsonDocument fields;
+    TEST_ASSERT_TRUE(extractServiceFields(lxmfPayload, fields));
+
+    ServiceMessage svcMsg = ServiceMessage::fromFields(fields);
+    TEST_ASSERT_EQUAL(MessageType::PROP_MSG_DELIVER, svcMsg.msg_type);
+
+    // Deserialize payload
+    PropMsgDeliverPayload decoded;
+    decoded.deserialize(svcMsg.payload.data(), svcMsg.payload.size());
+
+    TEST_ASSERT_EQUAL(32, decoded.transient_id.size());
+    TEST_ASSERT_TRUE(decoded.raw_lxmf.size() >= 96);
+
+    // Verify the raw LXMF byte structure: dest(16) + src(16) + sig(64) + payload
+    TEST_ASSERT_EQUAL(0x01, decoded.raw_lxmf.data()[0]);   // dest byte
+    TEST_ASSERT_EQUAL(0x02, decoded.raw_lxmf.data()[16]);  // src byte
+    TEST_ASSERT_EQUAL(0x03, decoded.raw_lxmf.data()[32]);  // sig byte
+}
+
+void test_prop_submit_request_message_generation(void) {
+    // Test generating a PROP_SUBMIT_REQUEST (as rDeck sends when direct delivery fails)
+    RNS::Bytes rawLxmf;
+    rawLxmf.append(makeBytes(16, 0xDE));  // dest_hash
+    rawLxmf.append(makeBytes(16, 0xAD));  // src_hash
+    rawLxmf.append(makeBytes(64, 0xBE));  // signature
+    rawLxmf.append(makeBytes(20, 0xEF));  // payload
+
+    PropSubmitRequestPayload payload;
+    payload.raw_lxmf = rawLxmf;
+
+    uint8_t payloadBuf[4096];
+    size_t payloadLen = payload.serialize(payloadBuf, sizeof(payloadBuf));
+
+    ServiceMessage msg;
+    msg.msg_type = MessageType::PROP_SUBMIT_REQUEST;
+    msg.service = "propagation";
+    msg.request_id = 800;
+    msg.payload.assign(payloadBuf, payloadLen);
+
+    // Convert to fields for LXMF
+    JsonDocument fields;
+    msg.toFields(fields);
+
+    TEST_ASSERT_EQUAL(0x43, fields["msg_type"].as<uint8_t>());
+    TEST_ASSERT_EQUAL_STRING("propagation", fields["service"].as<const char*>());
+
+    // Verify payload roundtrips
+    MsgPackBinary bin = fields["payload"].as<MsgPackBinary>();
+    PropSubmitRequestPayload decoded;
+    decoded.deserialize((const uint8_t*)bin.data(), bin.size());
+    TEST_ASSERT_EQUAL(rawLxmf.size(), decoded.raw_lxmf.size());
+}
+
+void test_prop_submit_response_handling(void) {
+    // Simulate receiving PROP_SUBMIT_RESPONSE from server
+    PropSubmitResponsePayload innerPayload;
+    innerPayload.accepted = true;
+    innerPayload.transient_id = makeBytes(32, 0xCC);
+
+    uint8_t innerBuf[256];
+    size_t innerLen = innerPayload.serialize(innerBuf, sizeof(innerBuf));
+
+    ServiceMessage incomingMsg;
+    incomingMsg.msg_type = MessageType::PROP_SUBMIT_RESPONSE;
+    incomingMsg.service = "propagation";
+    incomingMsg.request_id = 800;
+    incomingMsg.payload.assign(innerBuf, innerLen);
+
+    auto lxmfPayload = createLxmfPayload(incomingMsg);
+
+    JsonDocument fields;
+    TEST_ASSERT_TRUE(extractServiceFields(lxmfPayload, fields));
+
+    ServiceMessage svcMsg = ServiceMessage::fromFields(fields);
+    TEST_ASSERT_EQUAL(MessageType::PROP_SUBMIT_RESPONSE, svcMsg.msg_type);
+
+    PropSubmitResponsePayload decoded;
+    decoded.deserialize(svcMsg.payload.data(), svcMsg.payload.size());
+    TEST_ASSERT_TRUE(decoded.accepted);
+    TEST_ASSERT_EQUAL(32, decoded.transient_id.size());
+    TEST_ASSERT_TRUE(decoded.error.empty());
+}
+
+void test_prop_submit_response_rejected(void) {
+    PropSubmitResponsePayload innerPayload;
+    innerPayload.accepted = false;
+    innerPayload.error = "Invalid LXMF message";
+
+    uint8_t innerBuf[256];
+    size_t innerLen = innerPayload.serialize(innerBuf, sizeof(innerBuf));
+
+    ServiceMessage incomingMsg;
+    incomingMsg.msg_type = MessageType::PROP_SUBMIT_RESPONSE;
+    incomingMsg.service = "propagation";
+    incomingMsg.request_id = 801;
+    incomingMsg.payload.assign(innerBuf, innerLen);
+
+    auto lxmfPayload = createLxmfPayload(incomingMsg);
+
+    JsonDocument fields;
+    TEST_ASSERT_TRUE(extractServiceFields(lxmfPayload, fields));
+
+    ServiceMessage svcMsg = ServiceMessage::fromFields(fields);
+
+    PropSubmitResponsePayload decoded;
+    decoded.deserialize(svcMsg.payload.data(), svcMsg.payload.size());
+    TEST_ASSERT_FALSE(decoded.accepted);
+    TEST_ASSERT_EQUAL_STRING("Invalid LXMF message", decoded.error.c_str());
+}
+
+void test_prop_sync_request_empty_known_ids(void) {
+    // Test sync request with no known IDs (first sync)
+    PropSyncRequestPayload payload;
+    payload.lxmf_dest_hash = makeBytes(16, 0xFF);
+    // known_ids empty
+    payload.max_messages = 5;
+
+    uint8_t payloadBuf[256];
+    size_t payloadLen = payload.serialize(payloadBuf, sizeof(payloadBuf));
+
+    ServiceMessage msg;
+    msg.msg_type = MessageType::PROP_SYNC_REQUEST;
+    msg.service = "propagation";
+    msg.request_id = 710;
+    msg.payload.assign(payloadBuf, payloadLen);
+
+    auto lxmfPayload = createLxmfPayload(msg);
+
+    JsonDocument fields;
+    TEST_ASSERT_TRUE(extractServiceFields(lxmfPayload, fields));
+
+    ServiceMessage svcMsg = ServiceMessage::fromFields(fields);
+
+    PropSyncRequestPayload decoded;
+    decoded.deserialize(svcMsg.payload.data(), svcMsg.payload.size());
+    TEST_ASSERT_EQUAL(16, decoded.lxmf_dest_hash.size());
+    TEST_ASSERT_EQUAL(0, decoded.known_ids.size());
+    TEST_ASSERT_EQUAL(5, decoded.max_messages);
+}
+
+void test_prop_full_sync_roundtrip(void) {
+    // Test full propagation sync flow: request → response → deliver
+
+    // Step 1: Generate sync request
+    PropSyncRequestPayload reqPayload;
+    reqPayload.lxmf_dest_hash = makeBytes(16, 0xAA);
+    reqPayload.max_messages = 10;
+
+    uint8_t reqBuf[256];
+    size_t reqLen = reqPayload.serialize(reqBuf, sizeof(reqBuf));
+
+    // Step 2: Simulate sync response saying 1 message available
+    PropSyncResponsePayload respPayload;
+    respPayload.count = 1;
+
+    uint8_t respBuf[64];
+    size_t respLen = respPayload.serialize(respBuf, sizeof(respBuf));
+
+    PropSyncResponsePayload decodedResp;
+    decodedResp.deserialize(respBuf, respLen);
+    TEST_ASSERT_EQUAL(1, decodedResp.count);
+
+    // Step 3: Simulate message delivery
+    PropMsgDeliverPayload deliverPayload;
+    deliverPayload.transient_id = makeBytes(32, 0xBB);
+    RNS::Bytes rawMsg;
+    rawMsg.append(makeBytes(16, 0xAA));  // dest matching our request
+    rawMsg.append(makeBytes(16, 0xCC));  // src
+    rawMsg.append(makeBytes(64, 0xDD));  // sig
+    rawMsg.append(makeBytes(20, 0xEE));  // payload
+    deliverPayload.raw_lxmf = rawMsg;
+
+    uint8_t deliverBuf[4096];
+    size_t deliverLen = deliverPayload.serialize(deliverBuf, sizeof(deliverBuf));
+
+    PropMsgDeliverPayload decodedDeliver;
+    decodedDeliver.deserialize(deliverBuf, deliverLen);
+
+    // Verify dest hash in raw LXMF matches what we requested
+    RNS::Bytes deliveredDest = decodedDeliver.raw_lxmf.left(16);
+    TEST_ASSERT_EQUAL(16, deliveredDest.size());
+    TEST_ASSERT_EQUAL(0xAA, deliveredDest.data()[0]);
+}
+
+// ============================================================================
 // Message Type Routing Tests
 // ============================================================================
 
@@ -679,6 +1001,11 @@ void test_message_type_routing(void) {
         {MessageType::MAP_ROUTE_RESPONSE, "maps"},
         {MessageType::MAP_GEOCODE_REQUEST, "maps"},
         {MessageType::MAP_GEOCODE_RESPONSE, "maps"},
+        {MessageType::PROP_SYNC_REQUEST, "propagation"},
+        {MessageType::PROP_SYNC_RESPONSE, "propagation"},
+        {MessageType::PROP_MSG_DELIVER, "propagation"},
+        {MessageType::PROP_SUBMIT_REQUEST, "propagation"},
+        {MessageType::PROP_SUBMIT_RESPONSE, "propagation"},
     };
 
     for (const auto& tc : cases) {
@@ -775,6 +1102,17 @@ int main(int argc, char **argv) {
     RUN_TEST(test_route_response_handling);
     RUN_TEST(test_route_response_with_error_handling);
     RUN_TEST(test_geocode_response_handling);
+
+    // Propagation workflow tests
+    RUN_TEST(test_prop_sync_request_message_generation);
+    RUN_TEST(test_prop_sync_response_handling);
+    RUN_TEST(test_prop_sync_response_with_error);
+    RUN_TEST(test_prop_msg_deliver_handling);
+    RUN_TEST(test_prop_submit_request_message_generation);
+    RUN_TEST(test_prop_submit_response_handling);
+    RUN_TEST(test_prop_submit_response_rejected);
+    RUN_TEST(test_prop_sync_request_empty_known_ids);
+    RUN_TEST(test_prop_full_sync_roundtrip);
 
     // Message routing tests
     RUN_TEST(test_message_type_routing);

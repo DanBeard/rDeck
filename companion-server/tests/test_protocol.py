@@ -18,6 +18,11 @@ from companion_server.protocol.messages import (
     SearchRequestPayload,
     SearchResponsePayload,
     SearchResult,
+    PropSyncRequestPayload,
+    PropSyncResponsePayload,
+    PropMsgDeliverPayload,
+    PropSubmitRequestPayload,
+    PropSubmitResponsePayload,
 )
 from companion_server.protocol.serialization import (
     encode_service_fields,
@@ -351,3 +356,161 @@ class TestCrossCompatibilityVectors:
         assert fields["msg_type"] == 0x02
         assert fields["service"] == "trust"
         assert fields["request_id"] == 12345
+
+
+class TestPropagationMessageTypes:
+    """Test propagation message type enum values."""
+
+    def test_prop_sync_request_value(self):
+        assert MessageType.PROP_SYNC_REQUEST == 0x40
+
+    def test_prop_sync_response_value(self):
+        assert MessageType.PROP_SYNC_RESPONSE == 0x41
+
+    def test_prop_msg_deliver_value(self):
+        assert MessageType.PROP_MSG_DELIVER == 0x42
+
+    def test_prop_submit_request_value(self):
+        assert MessageType.PROP_SUBMIT_REQUEST == 0x43
+
+    def test_prop_submit_response_value(self):
+        assert MessageType.PROP_SUBMIT_RESPONSE == 0x44
+
+
+class TestPropSyncRequestPayload:
+    """Test PropSyncRequestPayload serialization."""
+
+    def test_encode_decode_roundtrip(self):
+        payload = PropSyncRequestPayload(
+            lxmf_dest_hash=bytes.fromhex("abcdef0123456789abcdef0123456789"),
+            known_ids=[bytes(32)],
+            max_messages=5,
+        )
+
+        encoded = _encode_payload(MessageType.PROP_SYNC_REQUEST, payload)
+        decoded = _decode_payload(MessageType.PROP_SYNC_REQUEST, encoded)
+
+        assert decoded.lxmf_dest_hash == bytes.fromhex("abcdef0123456789abcdef0123456789")
+        assert len(decoded.known_ids) == 1
+        assert decoded.max_messages == 5
+
+    def test_empty_known_ids(self):
+        payload = PropSyncRequestPayload(
+            lxmf_dest_hash=bytes(16),
+            known_ids=[],
+        )
+
+        encoded = _encode_payload(MessageType.PROP_SYNC_REQUEST, payload)
+        decoded = _decode_payload(MessageType.PROP_SYNC_REQUEST, encoded)
+
+        assert decoded.known_ids == []
+        assert decoded.max_messages == 10  # default
+
+    def test_canonical_encoding(self):
+        payload = PropSyncRequestPayload(
+            lxmf_dest_hash=bytes(16),
+            known_ids=[],
+            max_messages=10,
+        )
+
+        encoded = _encode_payload(MessageType.PROP_SYNC_REQUEST, payload)
+        data = msgpack.unpackb(encoded, raw=False)
+
+        assert "lxmf_dest_hash" in data
+        assert "known_ids" in data
+        assert "max_messages" in data
+
+
+class TestPropSyncResponsePayload:
+    """Test PropSyncResponsePayload serialization."""
+
+    def test_encode_decode_roundtrip(self):
+        payload = PropSyncResponsePayload(count=3)
+
+        encoded = _encode_payload(MessageType.PROP_SYNC_RESPONSE, payload)
+        decoded = _decode_payload(MessageType.PROP_SYNC_RESPONSE, encoded)
+
+        assert decoded.count == 3
+        assert decoded.error is None
+
+    def test_with_error(self):
+        payload = PropSyncResponsePayload(count=0, error="Propagation not enabled")
+
+        encoded = _encode_payload(MessageType.PROP_SYNC_RESPONSE, payload)
+        decoded = _decode_payload(MessageType.PROP_SYNC_RESPONSE, encoded)
+
+        assert decoded.count == 0
+        assert decoded.error == "Propagation not enabled"
+
+
+class TestPropMsgDeliverPayload:
+    """Test PropMsgDeliverPayload serialization."""
+
+    def test_encode_decode_roundtrip(self):
+        fake_lxmf = bytes(range(100))
+        payload = PropMsgDeliverPayload(
+            transient_id=bytes(32),
+            raw_lxmf=fake_lxmf,
+        )
+
+        encoded = _encode_payload(MessageType.PROP_MSG_DELIVER, payload)
+        decoded = _decode_payload(MessageType.PROP_MSG_DELIVER, encoded)
+
+        assert decoded.transient_id == bytes(32)
+        assert decoded.raw_lxmf == fake_lxmf
+
+    def test_canonical_encoding(self):
+        payload = PropMsgDeliverPayload(
+            transient_id=b"\xaa" * 32,
+            raw_lxmf=b"\xbb" * 50,
+        )
+
+        encoded = _encode_payload(MessageType.PROP_MSG_DELIVER, payload)
+        data = msgpack.unpackb(encoded, raw=False)
+
+        assert "transient_id" in data
+        assert "raw_lxmf" in data
+        assert isinstance(data["transient_id"], bytes)
+        assert isinstance(data["raw_lxmf"], bytes)
+
+
+class TestPropSubmitRequestPayload:
+    """Test PropSubmitRequestPayload serialization."""
+
+    def test_encode_decode_roundtrip(self):
+        fake_lxmf = bytes(range(200))
+        payload = PropSubmitRequestPayload(raw_lxmf=fake_lxmf)
+
+        encoded = _encode_payload(MessageType.PROP_SUBMIT_REQUEST, payload)
+        decoded = _decode_payload(MessageType.PROP_SUBMIT_REQUEST, encoded)
+
+        assert decoded.raw_lxmf == fake_lxmf
+
+
+class TestPropSubmitResponsePayload:
+    """Test PropSubmitResponsePayload serialization."""
+
+    def test_accepted(self):
+        payload = PropSubmitResponsePayload(
+            accepted=True,
+            transient_id=bytes(32),
+        )
+
+        encoded = _encode_payload(MessageType.PROP_SUBMIT_RESPONSE, payload)
+        decoded = _decode_payload(MessageType.PROP_SUBMIT_RESPONSE, encoded)
+
+        assert decoded.accepted is True
+        assert decoded.transient_id == bytes(32)
+        assert decoded.error is None
+
+    def test_rejected(self):
+        payload = PropSubmitResponsePayload(
+            accepted=False,
+            error="Propagation store full",
+        )
+
+        encoded = _encode_payload(MessageType.PROP_SUBMIT_RESPONSE, payload)
+        decoded = _decode_payload(MessageType.PROP_SUBMIT_RESPONSE, encoded)
+
+        assert decoded.accepted is False
+        assert decoded.error == "Propagation store full"

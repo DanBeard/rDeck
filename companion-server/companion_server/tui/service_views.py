@@ -618,3 +618,45 @@ class MapsServiceView(BaseServiceView):
             count_label.update(str(self._request_count))
         except Exception:
             pass
+
+
+class PropagationServiceView(BaseServiceView):
+    """Propagation service status and message history."""
+
+    DEFAULT_CSS = BaseServiceView.DEFAULT_CSS + """
+    PropagationServiceView {
+        height: 100%;
+    }
+    """
+
+    def __init__(self, config: Config, **kwargs):
+        super().__init__(**kwargs)
+        self._config = config
+
+    def compose(self) -> ComposeResult:
+        enabled = self._config.propagation_enabled
+        status_text = "Enabled" if enabled else "Disabled"
+        status_class = "status-value ok" if enabled else "status-value warn"
+
+        with Vertical(classes="status-section"):
+            with Horizontal(classes="status-row"):
+                yield Static("Status: ", classes="status-label")
+                yield Static(status_text, classes=status_class, id="prop-status")
+            with Horizontal(classes="status-row"):
+                yield Static("Max msgs/sync: ", classes="status-label")
+                yield Static(str(self._config.propagation_max_messages_per_sync), classes="status-value", id="prop-max")
+            with Horizontal(classes="status-row"):
+                yield Static("Requests: ", classes="status-label")
+                yield Static("0", classes="status-value", id="prop-count")
+        yield Static("Activity", classes="history-header")
+        with ScrollableContainer(classes="history-section"):
+            yield Static("No activity yet", classes="empty-history")
+
+    def add_event(self, event: ServiceEvent):
+        """Add event and update stats."""
+        super().add_event(event)
+        try:
+            count_label = self.query_one("#prop-count", Static)
+            count_label.update(str(self._request_count))
+        except Exception:
+            pass

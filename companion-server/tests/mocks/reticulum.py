@@ -338,6 +338,31 @@ class MockLXMRouter:
         with self._lock:
             self._outbound_messages.clear()
 
+    # Propagation support
+    def enable_propagation(self):
+        """Enable propagation node (mock - just sets a flag)."""
+        self._propagation_enabled = True
+
+    @property
+    def propagation_entries(self) -> dict:
+        """Propagation store entries: {transient_id: (dest_hash, filepath)}."""
+        if not hasattr(self, '_propagation_entries'):
+            self._propagation_entries = {}
+        return self._propagation_entries
+
+    def lxmf_propagation(self, raw_bytes, stamp_data=b'', stamp_value=0, is_paper_message=False):
+        """Inject raw LXMF bytes into the propagation store (mock)."""
+        import hashlib
+        transient_id = hashlib.sha256(raw_bytes).digest()
+        if not hasattr(self, '_propagation_store'):
+            self._propagation_store = []
+        self._propagation_store.append({
+            'transient_id': transient_id,
+            'raw_bytes': raw_bytes,
+            'stamp_data': stamp_data,
+            'stamp_value': stamp_value,
+        })
+
 
 @dataclass
 class ReticulumTestHarness:

@@ -27,8 +27,13 @@ from .protocol import (
     MapTileRequestPayload,
     MapRouteRequestPayload,
     MapGeocodeRequestPayload,
+    PropSyncRequestPayload,
+    PropSyncResponsePayload,
+    PropMsgDeliverPayload,
+    PropSubmitRequestPayload,
+    PropSubmitResponsePayload,
 )
-from .services import NTPService, SearchService
+from .services import NTPService, SearchService, PropagationService
 from .services.maps_service import MapsService
 
 logger = logging.getLogger(__name__)
@@ -113,6 +118,7 @@ class ReticulumService:
         self._ntp_service = NTPService()
         self._search_service = SearchService(config)
         self._maps_service = MapsService(config) if config.maps_enabled else None
+        self._propagation_service: Optional[PropagationService] = None  # Initialized after LXMF router
 
         # RNS/LXMF objects (initialized in start())
         self._reticulum: Optional[RNS.Reticulum] = None
@@ -188,6 +194,21 @@ class ReticulumService:
             identity=self._identity,
             storagepath=str(self.config.data_dir / "lxmf"),
         )
+
+        # Enable propagation if configured
+        if self.config.propagation_enabled:
+            try:
+                self._lxmf_router.enable_propagation()
+                self._propagation_service = PropagationService(
+                    self._lxmf_router, self.config.data_dir
+                )
+                # Add "propagation" to enabled services for trust offers
+                if "propagation" not in self.config.enabled_services:
+                    self.config.enabled_services.append("propagation")
+                self._log("LXMF propagation node enabled")
+            except Exception as e:
+                self._log(f"Failed to enable propagation: {e}")
+                logger.exception("Failed to enable propagation")
 
         # Register delivery callback
         self._lxmf_router.register_delivery_callback(self._on_lxmf_delivery)
@@ -481,6 +502,81 @@ class ReticulumService:
                 else:
                     self._log(f"[Maps] Sent {len(response.results)} geocode results to '{device_name}'")
                     self._fire_service_event("maps", "response", device_name, f"Geocode '{payload.query}' -> {len(response.results)} results")
+
+        elif msg.msg_type in (MessageType.PROP_SYNC_REQUEST, MessageType.PROP_SUBMIT_REQUEST):
+            # Propagation service requests
+            if not self._propagation_service:
+                self._log(f"[Propagation] Service not enabled, ignoring request")
+                return
+
+            device = self.trust_manager.get_device(hash_hex)
+            device_name = device.name if device else hash_hex[:12] + "..."
+
+            # Upgrade to mutual trust if pending
+            if self.trust_manager.is_trust_pending(hash_hex):
+                self._log(f"[Propagation] Device '{device_name}' sending request - upgrading to mutual trust")
+                self.trust_manager.accept_trust(hash_hex)
+
+            if not self.trust_manager.is_mutually_trusted(hash_hex):
+                self._log(f"[Propagation] Rejected request from untrusted '{device_name}'")
+                return
+
+            if msg.msg_type == MessageType.PROP_SYNC_REQUEST:
+                payload: PropSyncRequestPayload = msg.payload
+                self._log(f"[Propagation] '{device_name}' requesting sync")
+                sync_response, messages = self._propagation_service.handle_sync_request(payload, hash_hex)
+
+                # Send sync response first
+                self._send_service_message(
+                    source_hash,
+                    ServiceMessage(
+                        msg_type=MessageType.PROP_SYNC_RESPONSE,
+                        service="propagation",
+                        payload=sync_response,
+                        request_id=msg.request_id,
+                    ),
+                )
+
+                # Then send individual messages
+                delivered_ids = []
+                for deliver_msg in messages:
+                    self._send_service_message(
+                        source_hash,
+                        ServiceMessage(
+                            msg_type=MessageType.PROP_MSG_DELIVER,
+                            service="propagation",
+                            payload=deliver_msg,
+                            request_id=msg.request_id,
+                        ),
+                    )
+                    delivered_ids.append(deliver_msg.transient_id)
+
+                # Track delivered messages
+                if delivered_ids:
+                    self._propagation_service.mark_delivered(hash_hex, delivered_ids)
+
+                self._log(f"[Propagation] Sent {len(messages)} messages to '{device_name}'")
+                self._fire_service_event("propagation", "response", device_name, f"Sync: {len(messages)} messages delivered")
+
+            elif msg.msg_type == MessageType.PROP_SUBMIT_REQUEST:
+                payload: PropSubmitRequestPayload = msg.payload
+                self._log(f"[Propagation] '{device_name}' submitting message for propagation")
+                response = self._propagation_service.handle_submit_request(payload)
+                self._send_service_message(
+                    source_hash,
+                    ServiceMessage(
+                        msg_type=MessageType.PROP_SUBMIT_RESPONSE,
+                        service="propagation",
+                        payload=response,
+                        request_id=msg.request_id,
+                    ),
+                )
+                if response.accepted:
+                    self._log(f"[Propagation] Accepted message from '{device_name}': {response.transient_id.hex()[:16]}...")
+                    self._fire_service_event("propagation", "response", device_name, "Message accepted for propagation")
+                else:
+                    self._log(f"[Propagation] Rejected message from '{device_name}': {response.error}")
+                    self._fire_service_event("propagation", "error", device_name, f"Submit rejected: {response.error}")
 
     def send_trust_offer(self, destination_hash: str):
         """Send a trust offer to a device."""

@@ -7,6 +7,8 @@ from .messages import TileFormat, TravelMode
 from .messages import MapTileRequestPayload, MapTileResponsePayload
 from .messages import MapRouteRequestPayload, MapRouteResponsePayload, MapRouteInstruction
 from .messages import MapGeocodeRequestPayload, MapGeocodeResponsePayload, MapGeocodeResult
+from .messages import PropSyncRequestPayload, PropSyncResponsePayload
+from .messages import PropMsgDeliverPayload, PropSubmitRequestPayload, PropSubmitResponsePayload
 from .serialization import encode_service_fields, decode_service_fields
 
 __all__ = [
@@ -29,6 +31,11 @@ __all__ = [
     "MapGeocodeRequestPayload",
     "MapGeocodeResponsePayload",
     "MapGeocodeResult",
+    "PropSyncRequestPayload",
+    "PropSyncResponsePayload",
+    "PropMsgDeliverPayload",
+    "PropSubmitRequestPayload",
+    "PropSubmitResponsePayload",
     "encode_service_fields",
     "decode_service_fields",
 ]
