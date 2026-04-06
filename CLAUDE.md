@@ -628,3 +628,15 @@ This caused a crash in `Settings::stop()` when accessing a timezone value that h
 ### 5. Protocol Changes Must Be Synchronized
 
 Any change to message types, payload fields, or serialization format must be made in **both** C++ (`ServiceProtocol.h/cpp`) and Python (`messages.py`, `serialization.py`). Always add tests in both test suites. Use the `protocol-sync` skill to verify.
+
+## Known Build Warnings
+
+The build should be clean except for the following intentional/upstream warning. Treat any new warning as a regression and fix it.
+
+### Intentional
+
+- **`Crypto/RNG.cpp:87`** — `#warning "no hardware random number source detected for this platform"`. This fires only for the desktop emulator (no HW RNG). On real T-Deck Pro hardware it does not fire. Leave it; it is a useful reminder that the emulator uses software RNG and is not suitable for production key material.
+
+### Suppressed at the include site (do not re-enable globally)
+
+- **MsgPack 0.4.2** (`MsgPack/Packer.h`, `MsgPack/Unpacker.h`) still uses ArduinoJson 6's `Static`/`DynamicJsonDocument` internally. We suppress the deprecation warning with `#pragma GCC diagnostic` around the `<MsgPack.h>` include in `microReticulum/src/Link.cpp` only, so our own deprecation warnings remain visible. If `hideakitai/MsgPack` ever ships an ArduinoJson 7 release, remove the pragma and bump the dep.
