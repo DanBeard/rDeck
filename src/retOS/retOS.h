@@ -42,7 +42,7 @@ template<class T> AppInfo AppFactory(const char *name, const void* icon) {
         .name = name,
         .id = id,
         .icon = icon,
-        .factory = [name, id](){return new T(name, id);}
+        .factory = [name](){return new T(name, id);}
     };
     return result;
 };
@@ -52,7 +52,7 @@ template<class T> AppInfo AppFactory(const char *name, const void* icon) {
     static uint8_t id = id_counter++;
     static ServiceInfo result = {
         .id = id,
-        .factory = [id](){return new T(id);},
+        .factory = [](){return new T(id);},
         // proxy out the static settings saccessors
         .drawSettings = &(T::drawSettings),
         .applySettings= &(T::applySettings)
