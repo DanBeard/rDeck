@@ -45,7 +45,12 @@ static void onLinkPacket(const RNS::Bytes& plaintext, const RNS::Packet& packet)
 
     // Unpack the LXMF payload to check for service messages
     JsonDocument payloadDoc;
-    deserializeMsgPack(payloadDoc, lxmf_msg->packed_payload.data(), lxmf_msg->packed_payload.size());
+    DeserializationError err = deserializeMsgPack(payloadDoc, lxmf_msg->packed_payload.data(), lxmf_msg->packed_payload.size());
+
+    if (err) {
+        Serial.print("[LXMF] ERROR: MsgPack deserialization failed: ");
+        Serial.println(err.c_str());
+    }
 
     // LXMF payload format: [timestamp, title, content, fields]
     // Check if fields contains service message markers
@@ -60,8 +65,15 @@ static void onLinkPacket(const RNS::Bytes& plaintext, const RNS::Packet& packet)
                 Retcon::Service::ServiceMessage svcMsg = Retcon::Service::ServiceMessage::fromFields(fields);
                 rnsService->handleServiceMessage(svcMsg, lxmf_msg->src);
                 return;  // Don't process as regular LXMF message
+            } else {
+                Serial.println("[LXMF] Fields present but not a service message (missing msg_type/service/payload)");
             }
+        } else {
+            Serial.println("[LXMF] Fields slot is null or not an object — regular LXMF message");
         }
+    } else {
+        Serial.printf("[LXMF] Payload not a valid LXMF array (isArray=%d, size=%d) — expected [ts, title, content, fields]\n",
+                      payloadDoc.is<JsonArray>(), payloadDoc.is<JsonArray>() ? (int)payloadDoc.size() : 0);
     }
 
     // Regular LXMF message handling

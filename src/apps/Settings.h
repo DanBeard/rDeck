@@ -45,6 +45,7 @@ class Settings : public BaseApp {
         void drawTimeDateSection();
         void drawTrustedServersSection();
         void drawTrustedServerRow(const Retcon::Service::TrustedServer& server, bool isPending);
+        void drawDeviceNameSection();
         void drawDeviceIdentitySection();
 
 };

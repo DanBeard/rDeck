@@ -1,6 +1,7 @@
 #include "TDeckProScreen.h"
 #include "boards/TDeckPro.h"
 #include "lvgl.h"
+#include "core/lv_indev.h"
 #include <GxEPD2_BW.h>
 #include <Arduino.h>
 #include <TouchDrvCSTXXX.hpp>
@@ -22,6 +23,18 @@ lv_timer_t *flush_timer = NULL;
 // Periodic full refresh counter to prevent ghosting
 static uint8_t partial_update_count = 0;
 static const uint8_t FULL_REFRESH_INTERVAL = 25;
+
+// Touch indev pointer for busy callback input processing
+static lv_indev_t *touch_indev = NULL;
+
+// Called by GxEPD2 in a loop during _waitWhileBusy (~700ms partial, ~1100ms full).
+// Processes LVGL touch input so scroll gestures track the finger during e-paper refresh.
+static void epaper_busy_cb(const void*) {
+    if (touch_indev && touch_indev->driver && touch_indev->driver->read_timer) {
+        lv_indev_read_timer_cb(touch_indev->driver->read_timer);
+    }
+    delay(10);
+}
 
 
 union flush_buf_pixel
@@ -206,8 +219,11 @@ static void tdeck_pro_touchpad_read(lv_indev_drv_t * indev_drv, lv_indev_data_t 
     indev_drv.type = LV_INDEV_TYPE_POINTER;
     indev_drv.read_cb = tdeck_pro_touchpad_read;
     indev_drv.scroll_limit = 5;    // engage scroll sooner (default 10)
-    indev_drv.scroll_throw = 20;   // more momentum for e-paper (default 10)
-    lv_indev_drv_register(&indev_drv);
+    indev_drv.scroll_throw = 20;   // faster deceleration for e-paper (default 10) — settle quickly
+    touch_indev = lv_indev_drv_register(&indev_drv);
+
+    // Register busy callback so touch input is processed during e-paper refresh (~700ms)
+    display.epd2.setBusyCallback(epaper_busy_cb);
 }
 
 

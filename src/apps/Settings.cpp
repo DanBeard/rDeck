@@ -117,6 +117,9 @@ void Settings::drawScreen() {
     // Trusted servers section
     drawTrustedServersSection();
 
+    // Device name section
+    drawDeviceNameSection();
+
     // Device identity section (regenerate identity button)
     drawDeviceIdentitySection();
 
@@ -493,6 +496,37 @@ static void identityRegenCallback(lv_event_t* e) {
         lv_label_set_text(label, LV_SYMBOL_WARNING " Regenerate Identity");
     }
 #endif
+}
+
+void Settings::drawDeviceNameSection() {
+    drawSettingsSectionHeader(settings_column, "Device Name");
+
+    RnsService* rns = retOsGlobalPtr->fetchService<RnsService>();
+    const char* currentName = "";
+    if (rns && rns->userInfo.containsKey("name")) {
+        currentName = rns->userInfo["name"].as<const char*>();
+    }
+
+    static FunctorCallback name_callback;
+    name_callback = [](lv_event_t* e) {
+        lv_obj_t* ta = lv_event_get_target(e);
+        // Copy into String so ArduinoJson stores a copy, not a dangling pointer
+        String newName = lv_textarea_get_text(ta);
+        if (newName.length() > 0) {
+            RnsService* rns = retOsGlobalPtr->fetchService<RnsService>();
+            if (rns) {
+                rns->userInfo["name"] = newName;
+                rns->saveUserInfo();
+                // Re-announce with new name on services thread
+                rns->queueAction([rns]() {
+                    rns->announce();
+                });
+                Serial.printf("[Settings] Device name changed to '%s'\n", newName.c_str());
+            }
+        }
+    };
+
+    drawSettingsTextInputRow(settings_column, "Name", currentName, &name_callback);
 }
 
 void Settings::drawDeviceIdentitySection() {

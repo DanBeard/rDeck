@@ -41,6 +41,11 @@ def main():
         action="store_true",
         help="Enable verbose logging",
     )
+    parser.add_argument(
+        "--reset",
+        action="store_true",
+        help="Delete identity, trust, and config data then exit (interactive confirmation)",
+    )
     args = parser.parse_args()
 
     # Configure logging
@@ -56,6 +61,11 @@ def main():
         config = Config(data_dir=Path(args.data_dir))
     else:
         config = Config()
+
+    # Handle --reset: delete identity, trust, and config data
+    if args.reset:
+        _handle_reset(config.data_dir)
+        sys.exit(0)
 
     # Handle --with-maps: enable maps service with default Docker URLs
     if args.with_maps:
@@ -119,6 +129,45 @@ def main():
 
     # Cleanup
     rns_service.stop()
+
+
+def _handle_reset(data_dir: Path):
+    """Delete identity, trust, and config data from data_dir after user confirmation."""
+    import shutil
+
+    targets = []
+    trust_file = data_dir / "trust.json"
+    config_file = data_dir / "config.json"
+    reticulum_dir = data_dir / "reticulum"
+
+    if trust_file.exists():
+        targets.append(("file", trust_file))
+    if config_file.exists():
+        targets.append(("file", config_file))
+    if reticulum_dir.exists():
+        targets.append(("directory", reticulum_dir))
+
+    if not targets:
+        print(f"Nothing to reset in {data_dir}")
+        return
+
+    print(f"The following will be deleted from {data_dir}:")
+    for kind, path in targets:
+        print(f"  {kind}: {path}")
+
+    answer = input("\nProceed? [y/N] ").strip().lower()
+    if answer != "y":
+        print("Aborted.")
+        return
+
+    for kind, path in targets:
+        if kind == "directory":
+            shutil.rmtree(path)
+        else:
+            path.unlink()
+        print(f"  Deleted {path}")
+
+    print("Reset complete. A new identity will be created on next start.")
 
 
 def _ensure_reticulum_config(data_dir: Path, tcp_port: int):

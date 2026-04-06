@@ -237,7 +237,7 @@ static vector<RNS::Bytes> announce_list_lookup;
 static vector<RNS::Bytes> conversation_list_lookup;
 
 static void announce_click_callback(lv_event_t * event) {
-    uint16_t row = (uint32_t) lv_event_get_user_data(event);
+    uint16_t row = (uint16_t)(uintptr_t) lv_event_get_user_data(event);
     Serial.print("Announce click row: ");
     Serial.print(row);
     Serial.print(" of ");
@@ -278,7 +278,7 @@ static void conversation_prev_cb(lv_event_t * event) {
 }
 
 static void conversation_click_callback(lv_event_t * event) {
-    uint16_t row = (uint32_t) lv_event_get_user_data(event);
+    uint16_t row = (uint16_t)(uintptr_t) lv_event_get_user_data(event);
     Serial.print("Conversation click row: ");
     Serial.print(row);
     Serial.print(" of ");
@@ -334,7 +334,7 @@ void UChat::renderConversationList() {
         conversation_list_lookup.push_back(cmi.their_hash);
         lv_obj_t* btn = lv_list_add_btn(list, LV_SYMBOL_EDIT, display.c_str());
         lv_obj_set_style_pad_all(btn, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-        lv_obj_add_event_cb(btn, conversation_click_callback, LV_EVENT_CLICKED, (void*)(i - start));
+        lv_obj_add_event_cb(btn, conversation_click_callback, LV_EVENT_CLICKED, (void*)(uintptr_t)(i - start));
     }
 
     // Navigation row (only if multiple pages)
@@ -408,7 +408,7 @@ void UChat::renderAnnounceList() {
         announce_list_lookup.push_back(ad.dest);
         lv_obj_t* btn = lv_list_add_btn(list, LV_SYMBOL_EDIT, dn.c_str());
         lv_obj_set_style_pad_all(btn, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-        lv_obj_add_event_cb(btn, announce_click_callback, LV_EVENT_CLICKED, (void*)(i - start));
+        lv_obj_add_event_cb(btn, announce_click_callback, LV_EVENT_CLICKED, (void*)(uintptr_t)(i - start));
     }
 
     // Navigation row (only if multiple pages)

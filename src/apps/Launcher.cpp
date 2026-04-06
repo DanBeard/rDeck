@@ -30,7 +30,7 @@
 
 static void menu_btn_event_cb(lv_event_t *e)
 {
-    uint32_t id = (uint32_t)e->user_data;
+    uint32_t id = (uint32_t)(uintptr_t)e->user_data;
     Serial.print("APP CLICKED=");
     Serial.println(id);
     // lv_label_set_text(label, tgr->name);
@@ -72,6 +72,6 @@ void Launcher::menu_btn_create(lv_obj_t *parent, AppInfo& appInfo, int x, int y)
     lv_obj_set_style_border_width(label, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
     //launch on click
     uint32_t id_hax = appInfo.id;
-    lv_obj_add_event_cb(btn, menu_btn_event_cb, LV_EVENT_CLICKED, (void *)(id_hax));
+    lv_obj_add_event_cb(btn, menu_btn_event_cb, LV_EVENT_CLICKED, (void *)(uintptr_t)(id_hax));
     
 }

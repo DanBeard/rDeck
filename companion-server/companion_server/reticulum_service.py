@@ -607,10 +607,12 @@ class ReticulumService:
             self.trust_manager.offer_trust(destination_hash, display_name)
 
             self._log(f"Sent trust offer to {destination_hash[:12]}...")
+            self._fire_service_event("trust", "response", display_name, "Trust offer sent")
 
         except Exception as e:
             self._log(f"Error sending trust offer: {e}")
             logger.exception("Error sending trust offer")
+            self._fire_service_event("trust", "error", destination_hash[:12] + "...", f"Failed to send trust offer: {e}")
 
     def _send_service_message(self, destination_hash: bytes, msg: ServiceMessage):
         """Send a service message via LXMF."""
@@ -668,9 +670,13 @@ class ReticulumService:
                     desired_method=LXMF.LXMessage.DIRECT,
                 )
 
-            # Track delivery status
+            # Track delivery status with TUI-visible events
+            service_name = msg.service
+            device_name = hash_hex[:12] + "..."
+
             def on_delivered(message):
                 self._log(f"Message DELIVERED to {hash_hex[:12]}!")
+                self._fire_service_event(service_name, "response", device_name, "Message delivered")
 
             def on_failed(message):
                 state_names = {
@@ -683,6 +689,7 @@ class ReticulumService:
                 }
                 state_name = state_names.get(message.state, f"UNKNOWN({message.state})")
                 self._log(f"Message FAILED to {hash_hex[:12]}... (state: {state_name})")
+                self._fire_service_event(service_name, "error", device_name, f"Delivery failed ({state_name})")
 
             lxm.register_delivery_callback(on_delivered)
             lxm.register_failed_callback(on_failed)

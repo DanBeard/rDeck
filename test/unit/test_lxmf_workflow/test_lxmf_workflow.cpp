@@ -235,7 +235,8 @@ void test_lxmf_encrypted_on_wire(void) {
     packet.pack();
 
     // The raw bytes should NOT contain plaintext (encrypted for SINGLE dest)
-    TEST_ASSERT_EQUAL(-1, packet.raw().find("Encrypted Test"));
+    Bytes raw_bytes = packet.raw();
+    TEST_ASSERT_EQUAL(-1, raw_bytes.find("Encrypted Test"));
 
     // Inject and verify decryption
     mock_impl->inject(packet.raw());
