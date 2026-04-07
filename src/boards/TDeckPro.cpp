@@ -121,6 +121,12 @@ void tDeckBoardInit() {
     digitalWrite(BOARD_LORA_CS, HIGH);
 
     Serial.begin(115200);
+    // With ARDUINO_USB_CDC_ON_BOOT=1, Serial maps to native USB CDC. When no host
+    // is attached (battery/unplugged), the TX buffer fills and Serial.print blocks
+    // forever waiting for a reader. Setting the TX timeout to 0 makes writes drop
+    // bytes silently when no host is reading, so the device boots normally on
+    // battery while still working when plugged into a serial monitor.
+    Serial.setTxTimeoutMs(0);
 
     // IO
     pinMode(BOARD_KEYBOARD_LED, OUTPUT);
